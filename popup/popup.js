@@ -14,8 +14,20 @@ function escapeHtml(str) {
  * Applies Shift+Click range selection across a list of checkboxes
  */
 function applyShiftClickRangeSelection(checkboxes, clickedIndex, lastIndex, targetState) {
-  if (lastIndex === null || lastIndex === undefined || lastIndex < 0 || clickedIndex === lastIndex) {
+  if (!Array.isArray(checkboxes) || clickedIndex < 0 || clickedIndex >= checkboxes.length) {
     if (checkboxes && checkboxes[clickedIndex]) {
+      checkboxes[clickedIndex].checked = targetState;
+    }
+    return clickedIndex;
+  }
+  if (
+    lastIndex === null ||
+    lastIndex === undefined ||
+    lastIndex < 0 ||
+    lastIndex >= checkboxes.length ||
+    clickedIndex === lastIndex
+  ) {
+    if (checkboxes[clickedIndex]) {
       checkboxes[clickedIndex].checked = targetState;
     }
     return clickedIndex;
@@ -23,7 +35,7 @@ function applyShiftClickRangeSelection(checkboxes, clickedIndex, lastIndex, targ
   const start = Math.min(lastIndex, clickedIndex);
   const end = Math.max(lastIndex, clickedIndex);
   for (let i = start; i <= end; i++) {
-    if (checkboxes && checkboxes[i]) {
+    if (checkboxes[i]) {
       checkboxes[i].checked = targetState;
     }
   }
@@ -1069,6 +1081,7 @@ if (typeof document !== 'undefined') {
 
     const closeTabIds = shouldClose ? selectedIds : [];
 
+    let saveSucceeded = false;
     try {
       // Offload to background service worker for reliable batch saving
       await new Promise((resolve, reject) => {
@@ -1106,8 +1119,14 @@ if (typeof document !== 'undefined') {
       }
 
       saveTabsBtnText.textContent = 'Saved!';
+      saveSucceeded = true;
       showBanner(`Saved ${countToSave} tabs to ${selectedCollectionTitle}!`, 'info', 4000);
       tabsTagsComponent.clear();
+
+      if (shouldClose) {
+        openTabsData = openTabsData.filter(t => !selectedIds.includes(t.id));
+        renderOpenTabsList();
+      }
 
       setTimeout(() => {
         switchView('main');
@@ -1117,9 +1136,14 @@ if (typeof document !== 'undefined') {
       showBanner(`Failed to save tabs: ${err.message}`, 'error', 6000);
       saveTabsBtnText.textContent = `Save ${countToSave} tabs`;
     } finally {
-      executeSaveTabsBtn.disabled = false;
       saveTabsSpinner.classList.add('hidden');
-      updateTabsCounter();
+      if (!saveSucceeded) {
+        executeSaveTabsBtn.disabled = false;
+        updateTabsCounter();
+      } else {
+        executeSaveTabsBtn.disabled = true;
+        saveTabsBtnText.textContent = 'Saved!';
+      }
     }
   });
 

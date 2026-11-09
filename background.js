@@ -65,24 +65,32 @@ async function updateTabBadge(tabId, url) {
  * Set the saved checkmark badge on a tab
  */
 function setTabBadge(tabId) {
-  if (typeof chrome === 'undefined' || !chrome.action) return;
-  chrome.action.setBadgeText({ tabId, text: BADGE_TEXT_SAVED });
-  chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_COLOR_SAVED });
-  if (typeof chrome.action.setBadgeTextColor === 'function') {
-    try {
-      chrome.action.setBadgeTextColor({ tabId, color: '#ffffff' });
-    } catch (e) {}
+  if (typeof chrome === 'undefined' || !chrome.action || !tabId) return;
+  try {
+    chrome.action.setBadgeText({ tabId, text: BADGE_TEXT_SAVED });
+    chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_COLOR_SAVED });
+    if (typeof chrome.action.setBadgeTextColor === 'function') {
+      try {
+        chrome.action.setBadgeTextColor({ tabId, color: '#ffffff' });
+      } catch (e) {}
+    }
+    chrome.action.setTitle({ tabId, title: BADGE_TITLE_SAVED });
+  } catch (e) {
+    // Tab may be closed or unavailable
   }
-  chrome.action.setTitle({ tabId, title: BADGE_TITLE_SAVED });
 }
 
 /**
  * Clear the badge from a tab
  */
 function clearTabBadge(tabId) {
-  if (typeof chrome === 'undefined' || !chrome.action) return;
-  chrome.action.setBadgeText({ tabId, text: '' });
-  chrome.action.setTitle({ tabId, title: BADGE_TITLE_DEFAULT });
+  if (typeof chrome === 'undefined' || !chrome.action || !tabId) return;
+  try {
+    chrome.action.setBadgeText({ tabId, text: '' });
+    chrome.action.setTitle({ tabId, title: BADGE_TITLE_DEFAULT });
+  } catch (e) {
+    // Tab may be closed or unavailable
+  }
 }
 
 /**
@@ -109,10 +117,14 @@ async function handleSaveTabsBatch({ items = [], closeTabIds = [] } = {}) {
   // 1. Execute batch save via official batch endpoint POST /raindrops
   const result = await apiObj.createRaindropsBatch(token, items);
 
+  const tabIdsToClose = Array.isArray(closeTabIds)
+    ? closeTabIds.map(Number).filter(id => !isNaN(id) && id > 0)
+    : [];
+
   // 2. Close tabs ONLY AFTER successful batch save to prevent data loss
-  if (Array.isArray(closeTabIds) && closeTabIds.length > 0 && typeof chrome !== 'undefined' && chrome.tabs?.remove) {
+  if (tabIdsToClose.length > 0 && typeof chrome !== 'undefined' && chrome.tabs?.remove) {
     try {
-      await chrome.tabs.remove(closeTabIds);
+      await chrome.tabs.remove(tabIdsToClose);
     } catch (closeErr) {
       console.warn('[Background] Failed to close tabs after batch save:', closeErr);
     }
@@ -129,9 +141,10 @@ async function handleSaveTabsBatch({ items = [], closeTabIds = [] } = {}) {
         }
       }
     }
+    const closedSet = new Set(tabIdsToClose);
     for (const it of items) {
-      if (it.tabId) {
-        setTabBadge(it.tabId);
+      if (it.tabId && !closedSet.has(Number(it.tabId))) {
+        setTabBadge(Number(it.tabId));
       }
     }
   } catch (badgeErr) {
@@ -197,9 +210,13 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
       return true; // Keep message channel open for async response
     } else if (message?.action === 'saveTabsBatch') {
       handleSaveTabsBatch(message).then((result) => {
-        sendResponse?.(result);
+        try {
+          sendResponse?.(result);
+        } catch (_) {}
       }).catch((err) => {
-        sendResponse?.({ success: false, error: err.message });
+        try {
+          sendResponse?.({ success: false, error: err?.message || String(err) });
+        } catch (_) {}
       });
       return true; // Keep message channel open for async response
     }

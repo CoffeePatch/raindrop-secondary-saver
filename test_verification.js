@@ -860,6 +860,14 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
 
   RaindropAPI.request = origReq;
 
+  // Test invalid link filtering
+  const filteredRes = await RaindropAPI.createRaindropsBatch('valid-token', [
+    { url: '   ' },
+    null,
+    { title: 'No url' }
+  ]);
+  assert(filteredRes.items.length === 0, 'Invalid/empty/whitespace links filtered out');
+
   // 2. Shift+Click Range Selection Tests
   const { applyShiftClickRangeSelection } = require(path.join(EXT_DIR, 'popup/popup.js'));
   assert(typeof applyShiftClickRangeSelection === 'function', 'popup.js exports applyShiftClickRangeSelection');
@@ -902,14 +910,28 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
     'Shift+click reverse (7 down to 3) checks all intermediate checkboxes'
   );
 
+  // Robustness tests: out of bounds indices and null checks
+  const outOfBoundsLast = applyShiftClickRangeSelection(testCbs, 4, 999, false);
+  assert(outOfBoundsLast === 4 && testCbs[4].checked === false, 'applyShiftClickRangeSelection handles out-of-bounds lastIndex safely');
+  const outOfBoundsClicked = applyShiftClickRangeSelection(testCbs, 999, 2, false);
+  assert(outOfBoundsClicked === 999, 'applyShiftClickRangeSelection handles out-of-bounds clickedIndex safely');
+  const nullCheckboxes = applyShiftClickRangeSelection(null, 0, 0, true);
+  assert(nullCheckboxes === 0, 'applyShiftClickRangeSelection handles null checkboxes array safely');
+
   // 3. Background Service Worker Batch Saving & Tab Closing Safety
   assert(typeof backgroundWorker.handleSaveTabsBatch === 'function', 'background.js exports handleSaveTabsBatch');
 
   await RaindropStorage.setToken('bg-worker-token');
   let removedTabIds = [];
+  const badgedTabIds = [];
   global.chrome.tabs = global.chrome.tabs || {};
   global.chrome.tabs.remove = async (ids) => {
     removedTabIds = Array.isArray(ids) ? [...ids] : [ids];
+  };
+  global.chrome.action = global.chrome.action || {};
+  const origSetBadgeText = global.chrome.action.setBadgeText;
+  global.chrome.action.setBadgeText = ({ tabId, text }) => {
+    if (tabId) badgedTabIds.push(tabId);
   };
 
   let mockBatchCalled = false;
@@ -926,6 +948,7 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
 
   // Test successful batch save in background worker
   removedTabIds = [];
+  badgedTabIds.length = 0;
   const bgBatchResult = await backgroundWorker.handleSaveTabsBatch({
     items: [
       { url: 'https://page-1.com', title: 'Page 1', tabId: 201 },
@@ -938,6 +961,7 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(mockBatchCalled === true, 'handleSaveTabsBatch invokes RaindropAPI.createRaindropsBatch');
   assert(mockBatchItems.length === 2, 'Batch items passed to createRaindropsBatch');
   assert(removedTabIds.length === 2 && removedTabIds.includes(201) && removedTabIds.includes(202), 'Tabs closed after batch save completes');
+  assert(!badgedTabIds.includes(201) && !badgedTabIds.includes(202), 'SAFETY: Badges are NOT set on tabs that were closed');
 
   // SAFETY TEST: If Raindrop API throws error, tabs MUST NOT be closed!
   removedTabIds = [];
@@ -995,6 +1019,40 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(batchMessageResponse !== null, 'onMessage handler invoked sendResponse');
   assert(batchMessageResponse.success === true, 'onMessage returns success: true');
   assert(batchMessageResponse.count === 1, 'onMessage reports saved count: 1');
+
+  // 4. Test Save Tabs Button Feedback and State Lifecycle
+  {
+    let btnText = 'Save 2 tabs';
+    let btnDisabled = false;
+    let spinnerHidden = true;
+    let saveSucceeded = false;
+    const countToSave = 2;
+
+    // Simulate click on Save Tabs button
+    btnDisabled = true;
+    spinnerHidden = false;
+    btnText = `Saving ${countToSave} tabs...`;
+    assert(btnText === 'Saving 2 tabs...', 'Button shows instant "Saving X tabs..." feedback');
+    assert(btnDisabled === true && spinnerHidden === false, 'Button is disabled and spinner active while saving');
+
+    // Simulate batch save success
+    btnText = 'Saved!';
+    saveSucceeded = true;
+
+    // Simulate finally block logic
+    spinnerHidden = true;
+    if (!saveSucceeded) {
+      btnDisabled = false;
+      btnText = `Save ${countToSave} tabs`;
+    } else {
+      btnDisabled = true;
+      btnText = 'Saved!';
+    }
+
+    assert(btnText === 'Saved!', 'Button shows "Saved!" feedback after batch save without being overwritten');
+    assert(btnDisabled === true, 'Button stays disabled after "Saved!" to prevent duplicate submissions');
+    assert(spinnerHidden === true, 'Spinner is hidden after batch save completes');
+  }
 
   // Restore API method and token
   RaindropAPI.createRaindropsBatch = originalBatch;

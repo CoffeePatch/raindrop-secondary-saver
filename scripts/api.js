@@ -513,8 +513,9 @@ const RaindropAPI = {
     }
 
     const formattedItems = items.map(item => {
+      if (!item) return null;
       const link = item.link || item.url;
-      if (!link) return null;
+      if (!link || typeof link !== 'string' || !link.trim()) return null;
 
       const targetCollectionId = item.collection?.$id !== undefined
         ? Number(item.collection.$id)
@@ -525,8 +526,8 @@ const RaindropAPI = {
         : [];
 
       const payload = {
-        link,
-        title: item.title || link,
+        link: link.trim(),
+        title: item.title || link.trim(),
         excerpt: item.excerpt || item.note || '',
         note: item.note || '',
         important: Boolean(item.important),
@@ -561,6 +562,8 @@ const RaindropAPI = {
       });
       if (res?.items && Array.isArray(res.items)) {
         allSavedItems.push(...res.items);
+      } else {
+        allSavedItems.push(...chunk);
       }
     }
 
