@@ -713,12 +713,14 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(popupCss.includes('.tag-dropdown-add'), 'CSS includes .tag-dropdown-add styling for + Add tag option');
 
   console.log('\n=== 12. EMOJI CLEANING, BACKGROUND WORKER & TOOLBAR BADGE ===');
-  // 1. Emoji Cleaning
+  // 1. Emoji Cleaning & Hierarchy icon check
   const popupJsContent = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.js'), 'utf8');
   assert(!popupJsContent.includes('👥'), 'popup.js does not contain two-people emoji 👥');
   assert(!popupHtml.includes('👥'), 'popup.html does not contain two-people emoji 👥');
   const apiJsContent = fs.readFileSync(path.join(EXT_DIR, 'scripts/api.js'), 'utf8');
   assert(!apiJsContent.includes("'🌐'"), 'scripts/api.js does not force public globe emoji 🌐 on collections');
+  const defaultHierarchy = RaindropAPI.buildCollectionHierarchy([], []);
+  assert(defaultHierarchy[0].icon === '〰', 'Unsorted collection uses clean wave icon 〰 instead of in-tray emoji 📥');
 
   // 2. Background Worker Tests
   const backgroundWorker = require(path.join(EXT_DIR, 'background.js'));
@@ -733,16 +735,19 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   // 3. Mock Chrome Action Badge tests
   let lastBadgeText = null;
   let lastBadgeColor = null;
+  let lastBadgeTextColor = null;
   let lastBadgeTitle = null;
   global.chrome.action = {
     setBadgeText: ({ tabId, text }) => { lastBadgeText = text; },
     setBadgeBackgroundColor: ({ tabId, color }) => { lastBadgeColor = color; },
+    setBadgeTextColor: ({ tabId, color }) => { lastBadgeTextColor = color; },
     setTitle: ({ tabId, title }) => { lastBadgeTitle = title; }
   };
 
   backgroundWorker.setTabBadge(123);
   assert(lastBadgeText === '✓', 'setTabBadge sets checkmark text ✓');
   assert(lastBadgeColor === '#10B981', 'setTabBadge sets Account B green badge background #10B981');
+  assert(lastBadgeTextColor === '#ffffff', 'setTabBadge sets crisp white text color #ffffff');
   assert(lastBadgeTitle === 'Saved in Raindrop (Account B)', 'setTabBadge sets Account B title');
 
   backgroundWorker.clearTabBadge(123);
@@ -767,6 +772,16 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
 
   await backgroundWorker.updateTabBadge(456, 'https://unsaved-article.com');
   assert(lastBadgeText === '', 'updateTabBadge clears badge when URL is not bookmarked');
+
+  await backgroundWorker.updateTabBadge(456, 'chrome://extensions');
+  assert(lastBadgeText === '', 'updateTabBadge clears badge for non-checkable chrome:// URL');
+
+  await backgroundWorker.updateTabBadge(456, null);
+  assert(lastBadgeText === '', 'updateTabBadge clears badge when tab URL is null/undefined');
+
+  await RaindropStorage.clearToken();
+  await backgroundWorker.updateTabBadge(456, 'https://saved-article.com');
+  assert(lastBadgeText === '', 'updateTabBadge clears badge when no token is configured');
 
   RaindropAPI.checkUrl = originalCheckUrl;
 

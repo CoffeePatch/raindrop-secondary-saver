@@ -1026,6 +1026,9 @@ if (typeof document !== 'undefined') {
           if (typeof chrome !== 'undefined' && chrome.action?.setBadgeText) {
             chrome.action.setBadgeText({ tabId: tab.id, text: '✓' });
             chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#10B981' });
+            if (typeof chrome.action.setBadgeTextColor === 'function') {
+              try { chrome.action.setBadgeTextColor({ tabId: tab.id, color: '#ffffff' }); } catch (e) {}
+            }
             chrome.action.setTitle({ tabId: tab.id, title: 'Saved in Raindrop (Account B)' });
           }
           if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
@@ -1076,9 +1079,12 @@ if (typeof document !== 'undefined') {
 
         if (isInternal) {
           showBanner('Internal browser tab. Enter a web URL to bookmark.', 'warning', 4000);
+          updateToolbarBadge(false);
         } else if (currentToken && tab.url) {
           // Check if already bookmarked
           checkBookmarkStatus(tab.url);
+        } else if (!currentToken) {
+          updateToolbarBadge(false);
         }
       }
     } catch (e) {
@@ -1092,6 +1098,9 @@ if (typeof document !== 'undefined') {
       if (saved) {
         chrome.action.setBadgeText({ tabId: currentTab.id, text: '✓' });
         chrome.action.setBadgeBackgroundColor({ tabId: currentTab.id, color: '#10B981' });
+        if (typeof chrome.action.setBadgeTextColor === 'function') {
+          try { chrome.action.setBadgeTextColor({ tabId: currentTab.id, color: '#ffffff' }); } catch (e) {}
+        }
         chrome.action.setTitle({ tabId: currentTab.id, title: 'Saved in Raindrop (Account B)' });
       } else {
         chrome.action.setBadgeText({ tabId: currentTab.id, text: '' });
@@ -1338,6 +1347,7 @@ if (typeof document !== 'undefined') {
     await RaindropStorage.clearToken();
     currentToken = null;
     currentUser = null;
+    updateToolbarBadge(false);
     showBanner('Disconnected from Account B.', 'info', 3000);
     switchView('settings');
   });

@@ -270,7 +270,7 @@ const RaindropAPI = {
       {
         id: 0,
         title: 'Unsorted',
-        icon: '📥',
+        icon: '〰',
         level: 0,
         count: 0
       }

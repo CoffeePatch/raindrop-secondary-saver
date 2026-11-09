@@ -68,6 +68,11 @@ function setTabBadge(tabId) {
   if (typeof chrome === 'undefined' || !chrome.action) return;
   chrome.action.setBadgeText({ tabId, text: BADGE_TEXT_SAVED });
   chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_COLOR_SAVED });
+  if (typeof chrome.action.setBadgeTextColor === 'function') {
+    try {
+      chrome.action.setBadgeTextColor({ tabId, color: '#ffffff' });
+    } catch (e) {}
+  }
   chrome.action.setTitle({ tabId, title: BADGE_TITLE_SAVED });
 }
 
@@ -85,11 +90,9 @@ if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
     try {
       const tab = await chrome.tabs.get(activeInfo.tabId);
-      if (tab?.url) {
-        await updateTabBadge(tab.id, tab.url);
-      }
+      await updateTabBadge(activeInfo.tabId, tab?.url);
     } catch (e) {
-      // Tab may be closed or inaccessible
+      clearTabBadge(activeInfo.tabId);
     }
   });
 }
@@ -97,8 +100,8 @@ if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
 // 2. Listen for tab updates (URL change or complete load)
 if (typeof chrome !== 'undefined' && chrome.tabs?.onUpdated) {
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'complete' && tab?.url) {
-      updateTabBadge(tabId, tab.url);
+    if (changeInfo.status === 'complete') {
+      updateTabBadge(tabId, tab?.url);
     }
   });
 }
@@ -117,6 +120,41 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
         sendResponse?.({ success: true });
       });
       return true; // Keep message channel open for async response
+    }
+  });
+}
+
+// 4. Listen for window focus changes
+if (typeof chrome !== 'undefined' && chrome.windows?.onFocusChanged) {
+  chrome.windows.onFocusChanged.addListener(async (windowId) => {
+    if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, windowId });
+      if (tab?.id) {
+        await updateTabBadge(tab.id, tab.url);
+      }
+    } catch (e) {}
+  });
+}
+
+// 5. Check active tab on startup/initialization
+if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+  chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => {
+    if (tab?.id) {
+      updateTabBadge(tab.id, tab.url);
+    }
+  }).catch(() => {});
+}
+
+// 6. Listen for credential updates/disconnect to refresh badge
+if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (changes.raindrop_token) {
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => {
+        if (tab?.id) {
+          updateTabBadge(tab.id, tab.url);
+        }
+      }).catch(() => {});
     }
   });
 }
