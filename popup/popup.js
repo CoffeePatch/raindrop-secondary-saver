@@ -41,10 +41,11 @@ class TagChipsComponent {
   init() {
     if (!this.container || !this.input) return;
 
-    // Focus input when clicking anywhere in the container
+    // Focus input and show dropdown when clicking anywhere in the container
     this.container.addEventListener('click', (e) => {
       if (!e.target.closest || !e.target.closest('.tag-chip')) {
         this.input.focus();
+        this.renderDropdown();
       }
     });
 
@@ -109,15 +110,15 @@ class TagChipsComponent {
         this.updateActiveItem(items);
       }
     } else if (e.key === 'Enter') {
-      e.preventDefault();
       if (isDropdownOpen && this.activeAutocompleteIndex >= 0 && items[this.activeAutocompleteIndex]) {
+        e.preventDefault();
         items[this.activeAutocompleteIndex].click();
-      } else if (isDropdownOpen && items.length > 0) {
-        items[0].click();
-      } else {
-        const text = (this.input.value || '').trim();
-        if (text) {
-          this.addTag(text);
+      } else if ((this.input.value || '').trim()) {
+        e.preventDefault();
+        if (isDropdownOpen && items.length > 0) {
+          items[0].click();
+        } else {
+          this.addTag(this.input.value.trim());
         }
       }
     } else if (e.key === ',') {
@@ -132,16 +133,20 @@ class TagChipsComponent {
         (this.input.selectionStart === 0 || this.input.selectionStart === undefined) &&
         (this.input.selectionEnd === 0 || this.input.selectionEnd === undefined)
       ) {
-        this.removeLastTag();
+        if (this.tags.length > 0) {
+          if (e.preventDefault) e.preventDefault();
+          this.removeLastTag();
+        }
       }
     } else if (e.key === 'Tab') {
-      if (isDropdownOpen && items.length > 0) {
+      if (isDropdownOpen && this.activeAutocompleteIndex >= 0 && items[this.activeAutocompleteIndex]) {
         e.preventDefault();
-        const target =
-          this.activeAutocompleteIndex >= 0 && items[this.activeAutocompleteIndex]
-            ? items[this.activeAutocompleteIndex]
-            : items[0];
-        target.click();
+        items[this.activeAutocompleteIndex].click();
+      } else if (isDropdownOpen && (this.input.value || '').trim() && items.length > 0) {
+        e.preventDefault();
+        items[0].click();
+      } else {
+        this.hideDropdown();
       }
     } else if (e.key === 'Escape') {
       this.hideDropdown();
@@ -186,6 +191,12 @@ class TagChipsComponent {
       chip.appendChild(removeBtn);
       chip.appendChild(textSpan);
 
+      removeBtn.addEventListener('click', (e) => {
+        if (e.stopPropagation) e.stopPropagation();
+        this.removeTag(tag);
+        if (this.input && this.input.focus) this.input.focus();
+      });
+
       chip.addEventListener('click', (e) => {
         if (e.stopPropagation) e.stopPropagation();
         this.removeTag(tag);
@@ -206,14 +217,22 @@ class TagChipsComponent {
 
   addTag(tag) {
     if (!tag) return;
-    const cleanTag = String(tag).trim();
-    if (!cleanTag) return;
+    const parts = String(tag).split(',');
+    let added = false;
+    for (const part of parts) {
+      const cleanTag = part.trim();
+      if (!cleanTag) continue;
 
-    const exists = this.tags.some(
-      (t) => t.toLowerCase() === cleanTag.toLowerCase()
-    );
-    if (!exists) {
-      this.tags.push(cleanTag);
+      const exists = this.tags.some(
+        (t) => t.toLowerCase() === cleanTag.toLowerCase()
+      );
+      if (!exists) {
+        this.tags.push(cleanTag);
+        added = true;
+      }
+    }
+
+    if (added) {
       this.renderChips();
       this.onChange(this.tags);
     }
@@ -249,11 +268,14 @@ class TagChipsComponent {
     const seen = new Set();
     const clean = [];
     for (const t of list) {
-      const s = String(t).trim();
-      const lower = s.toLowerCase();
-      if (s && !seen.has(lower)) {
-        seen.add(lower);
-        clean.push(s);
+      const parts = String(t).split(',');
+      for (const p of parts) {
+        const s = p.trim();
+        const lower = s.toLowerCase();
+        if (s && !seen.has(lower)) {
+          seen.add(lower);
+          clean.push(s);
+        }
       }
     }
     this.tags = clean;
@@ -305,6 +327,14 @@ class TagChipsComponent {
       const addEl = this.doc.createElement('div');
       addEl.className = 'tag-dropdown-item tag-dropdown-add';
       addEl.innerHTML = `<span class="tag-item-name">+ Add tag "<strong>#${escapeHtml(grouped.addTagOption)}</strong>"</span>`;
+      addEl.addEventListener('mouseenter', () => {
+        const items = this.dropdownList.querySelectorAll('.tag-dropdown-item');
+        items.forEach((it, idx) => {
+          const isActive = it === addEl;
+          it.classList.toggle('active-item', isActive);
+          if (isActive) this.activeAutocompleteIndex = idx;
+        });
+      });
       addEl.addEventListener('mousedown', (e) => {
         if (e.preventDefault) e.preventDefault();
         this.addTag(grouped.addTagOption);
@@ -331,6 +361,14 @@ class TagChipsComponent {
           <span class="tag-item-name"># ${escapeHtml(item.tag)}</span>
           ${item.count > 0 ? `<span class="tag-item-count">${item.count}</span>` : ''}
         `;
+        row.addEventListener('mouseenter', () => {
+          const items = this.dropdownList.querySelectorAll('.tag-dropdown-item');
+          items.forEach((it, idx) => {
+            const isActive = it === row;
+            it.classList.toggle('active-item', isActive);
+            if (isActive) this.activeAutocompleteIndex = idx;
+          });
+        });
         row.addEventListener('mousedown', (e) => {
           if (e.preventDefault) e.preventDefault();
           this.addTag(item.tag);
@@ -358,6 +396,14 @@ class TagChipsComponent {
           <span class="tag-item-name"># ${escapeHtml(item.tag)}</span>
           ${item.count > 0 ? `<span class="tag-item-count">${item.count}</span>` : ''}
         `;
+        row.addEventListener('mouseenter', () => {
+          const items = this.dropdownList.querySelectorAll('.tag-dropdown-item');
+          items.forEach((it, idx) => {
+            const isActive = it === row;
+            it.classList.toggle('active-item', isActive);
+            if (isActive) this.activeAutocompleteIndex = idx;
+          });
+        });
         row.addEventListener('mousedown', (e) => {
           if (e.preventDefault) e.preventDefault();
           this.addTag(item.tag);
@@ -988,6 +1034,7 @@ if (typeof document !== 'undefined') {
       }
 
       showBanner(`Saved ${savedCount} tabs to ${selectedCollectionTitle}!`, 'info', 4000);
+      tabsTagsComponent.clear();
       switchView('main');
     } catch (err) {
       console.error('Failed while saving tabs:', err);

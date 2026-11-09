@@ -637,6 +637,46 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(chipComponent.getTags().length === 0, '1-click removal: clicking tag chip deletes it');
   assert(mockContainer.querySelectorAll('.tag-chip').length === 0, '1-click removal: chip element removed from DOM');
 
+  // Test 1-click chip deletion via direct remove button click
+  chipComponent.setTags(['direct-remove-test']);
+  const directChip = mockContainer.querySelectorAll('.tag-chip')[0];
+  const directRemoveBtn = directChip.querySelectorAll('.tag-chip-remove')[0];
+  directRemoveBtn.click();
+  assert(chipComponent.getTags().length === 0, '1-click removal: clicking ✕ remove button directly deletes it');
+
+  // Test comma-separated addTag
+  chipComponent.addTag('tag-a, tag-b');
+  assert(chipComponent.getTags().length === 2 && chipComponent.getTags()[1] === 'tag-b', 'addTag handles comma-separated string');
+
+  // Test keyboard Enter on empty input does not add random recent tag
+  chipComponent.clear();
+  chipComponent.renderDropdown();
+  const enterOnEmptyEvent = { key: 'Enter', preventDefault() {} };
+  mockInput.value = '';
+  chipComponent.handleKeydown(enterOnEmptyEvent);
+  assert(chipComponent.getTags().length === 0, 'Enter key on empty input does not select first dropdown item');
+
+  // Test keyboard Tab on empty input does not select tag and closes dropdown
+  mockInput.value = '';
+  let tabPrevented = false;
+  const tabOnEmptyEvent = { key: 'Tab', preventDefault() { tabPrevented = true; } };
+  chipComponent.handleKeydown(tabOnEmptyEvent);
+  assert(!tabPrevented, 'Tab key on empty input allows default tab navigation');
+  assert(chipComponent.getTags().length === 0, 'Tab key on empty input does not add a tag');
+  assert(mockDropdown.classList.contains('hidden'), 'Tab key on empty input closes dropdown');
+
+  // Test keyboard Enter with typed text adds tag
+  mockInput.value = 'typed-enter-tag';
+  const enterWithTextEvent = { key: 'Enter', preventDefault() {} };
+  chipComponent.handleKeydown(enterWithTextEvent);
+  assert(chipComponent.getTags().includes('typed-enter-tag'), 'Enter key with typed text adds tag');
+
+  // Test count mapping in groupTagsForDropdown with leading # in allTags
+  const allTagsWithHash = [{ tag: '#special', count: 42 }];
+  const recentTagsWithHash = ['special'];
+  const ddHashResult = RaindropAPI.groupTagsForDropdown('', [], recentTagsWithHash, allTagsWithHash);
+  assert(ddHashResult.recentMatches.length === 1 && ddHashResult.recentMatches[0].count === 42, 'groupTagsForDropdown maps count even when allTags item has leading #');
+
   // Test Backspace chip deletion
   chipComponent.setTags(['alpha', 'beta', 'gamma']);
   assert(chipComponent.getTags().length === 3, 'setTags populates 3 chips');

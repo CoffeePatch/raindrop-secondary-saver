@@ -383,10 +383,13 @@ const RaindropAPI = {
     // Fast count lookup map from allTags
     const countMap = new Map();
     for (const item of allTags || []) {
-      const name = typeof item === 'string' ? item : item?.tag;
+      const rawName = typeof item === 'string' ? item : item?.tag;
       const count = typeof item === 'object' && typeof item?.count === 'number' ? item.count : 0;
-      if (name) {
-        countMap.set(String(name).toLowerCase(), { tag: String(name), count });
+      if (rawName) {
+        const cleanName = String(rawName).trim().replace(/^#+/, '');
+        if (cleanName) {
+          countMap.set(cleanName.toLowerCase(), { tag: cleanName, count });
+        }
       }
     }
 
@@ -417,15 +420,17 @@ const RaindropAPI = {
       if (countB !== countA) return countB - countA;
       const nameA = typeof a === 'string' ? a : (a?.tag || '');
       const nameB = typeof b === 'string' ? b : (b?.tag || '');
-      return String(nameA).localeCompare(String(nameB));
+      const cleanA = String(nameA).trim().replace(/^#+/, '');
+      const cleanB = String(nameB).trim().replace(/^#+/, '');
+      return cleanA.localeCompare(cleanB);
     });
 
     const otherMatches = [];
     for (const item of sortedAll) {
-      const name = typeof item === 'string' ? item : item?.tag;
+      const rawName = typeof item === 'string' ? item : item?.tag;
       const count = typeof item === 'object' && typeof item?.count === 'number' ? item.count : 0;
-      if (!name) continue;
-      const cleanName = String(name).trim().replace(/^#+/, '');
+      if (!rawName) continue;
+      const cleanName = String(rawName).trim().replace(/^#+/, '');
       const lower = cleanName.toLowerCase();
       if (!cleanName || selectedSet.has(lower) || recentSeen.has(lower)) continue;
       if (!q || lower.includes(q)) {
