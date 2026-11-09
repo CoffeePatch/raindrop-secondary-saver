@@ -504,6 +504,70 @@ const RaindropAPI = {
   },
 
   /**
+   * Create multiple bookmarks in batch using POST /raindrops (plural)
+   * Automatically chunks into batches of 100 if > 100 items
+   */
+  async createRaindropsBatch(token, items) {
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return { result: true, items: [] };
+    }
+
+    const formattedItems = items.map(item => {
+      const link = item.link || item.url;
+      if (!link) return null;
+
+      const targetCollectionId = item.collection?.$id !== undefined
+        ? Number(item.collection.$id)
+        : ((item.collectionId !== undefined && item.collectionId !== null && !isNaN(Number(item.collectionId))) ? Number(item.collectionId) : 0);
+
+      const cleanTags = Array.isArray(item.tags)
+        ? Array.from(new Set(item.tags.map(t => String(t).trim().replace(/^#+/, '')).filter(Boolean)))
+        : [];
+
+      const payload = {
+        link,
+        title: item.title || link,
+        excerpt: item.excerpt || item.note || '',
+        note: item.note || '',
+        important: Boolean(item.important),
+        tags: cleanTags,
+        collection: {
+          $id: targetCollectionId
+        },
+        pleaseParse: item.pleaseParse || {}
+      };
+
+      if (item.reminder) {
+        payload.reminder = typeof item.reminder === 'object' && item.reminder?.date
+          ? item.reminder
+          : { date: new Date(Date.now() + 86400000).toISOString() };
+      }
+
+      return payload;
+    }).filter(Boolean);
+
+    if (formattedItems.length === 0) {
+      return { result: true, items: [] };
+    }
+
+    const BATCH_SIZE = 100;
+    const allSavedItems = [];
+
+    for (let i = 0; i < formattedItems.length; i += BATCH_SIZE) {
+      const chunk = formattedItems.slice(i, i + BATCH_SIZE);
+      const res = await this.request('/raindrops', token, {
+        method: 'POST',
+        body: { items: chunk }
+      });
+      if (res?.items && Array.isArray(res.items)) {
+        allSavedItems.push(...res.items);
+      }
+    }
+
+    return { result: true, items: allSavedItems };
+  },
+
+  /**
    * Check if a URL is already bookmarked
    */
   async checkUrl(token, url) {

@@ -544,10 +544,20 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
       },
       querySelectorAll(selector) {
         const matches = [];
+        const isCheckedFilter = selector.includes(':checked');
+        const cleanSel = selector.replace(':checked', '');
         function walk(node) {
           for (const child of node.children || []) {
-            if (selector.startsWith('.') && child.classList.contains(selector.slice(1))) {
-              matches.push(child);
+            let matched = false;
+            if (cleanSel.startsWith('.') && child.classList.contains(cleanSel.slice(1))) {
+              matched = true;
+            } else if (child.tagName === cleanSel.toUpperCase()) {
+              matched = true;
+            }
+            if (matched) {
+              if (!isCheckedFilter || child.checked) {
+                matches.push(child);
+              }
             }
             walk(child);
           }
@@ -784,6 +794,211 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(lastBadgeText === '', 'updateTabBadge clears badge when no token is configured');
 
   RaindropAPI.checkUrl = originalCheckUrl;
+
+  console.log('\n=== 13. SHIFT+CLICK RANGE SELECTION & BACKGROUND BATCH SAVING (POST /raindrops) ===');
+
+  // 1. RaindropAPI.createRaindropsBatch Tests
+  assert(typeof RaindropAPI.createRaindropsBatch === 'function', 'createRaindropsBatch is defined on RaindropAPI');
+
+  // Empty items edge case
+  const emptyRes = await RaindropAPI.createRaindropsBatch('test-token', []);
+  assert(emptyRes.result === true && emptyRes.items.length === 0, 'createRaindropsBatch returns empty array for empty items');
+
+  // Verify POST /raindrops plural endpoint & payload structure
+  const interceptedBatchCalls = [];
+  const origReq = RaindropAPI.request;
+  RaindropAPI.request = async (endpoint, token, options) => {
+    const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+    interceptedBatchCalls.push({
+      endpoint,
+      token,
+      method: options.method,
+      body: parsedBody
+    });
+    return {
+      result: true,
+      items: (parsedBody?.items || []).map((it, i) => ({
+        _id: 2000 + i,
+        link: it.link,
+        title: it.title,
+        collection: it.collection
+      }))
+    };
+  };
+
+  const sampleBatch = [
+    { url: 'https://site-a.com', title: 'Site A', tags: ['#news', 'daily'], collectionId: 10 },
+    { link: 'https://site-b.com', title: 'Site B', collection: { $id: 20 }, reminder: true }
+  ];
+
+  const batchResult = await RaindropAPI.createRaindropsBatch('valid-token', sampleBatch);
+  assert(interceptedBatchCalls.length === 1, 'Batch with 2 items executes 1 API call');
+  assert(interceptedBatchCalls[0].endpoint === '/raindrops', 'createRaindropsBatch targets official plural /raindrops endpoint');
+  assert(interceptedBatchCalls[0].method === 'POST', 'createRaindropsBatch uses POST method');
+  assert(Array.isArray(interceptedBatchCalls[0].body.items), 'Payload contains items array');
+  assert(interceptedBatchCalls[0].body.items.length === 2, 'Payload items length is 2');
+  assert(interceptedBatchCalls[0].body.items[0].link === 'https://site-a.com', 'url mapped to link property');
+  assert(interceptedBatchCalls[0].body.items[0].tags.includes('news') && !interceptedBatchCalls[0].body.items[0].tags.includes('#news'), 'Tags cleaned of leading hashes');
+  assert(interceptedBatchCalls[0].body.items[0].collection.$id === 10, 'collectionId normalized to collection.$id');
+  assert(interceptedBatchCalls[0].body.items[1].collection.$id === 20, 'Existing collection.$id preserved');
+  assert(interceptedBatchCalls[0].body.items[1].reminder && interceptedBatchCalls[0].body.items[1].reminder.date, 'Reminder formatted and included');
+  assert(batchResult.items.length === 2, 'Returns all created raindrops from batch');
+
+  // Test automatic chunking into batches of 100
+  interceptedBatchCalls.length = 0;
+  const largeBatch = [];
+  for (let i = 1; i <= 245; i++) {
+    largeBatch.push({ url: `https://tab${i}.com`, title: `Tab ${i}` });
+  }
+
+  const largeResult = await RaindropAPI.createRaindropsBatch('valid-token', largeBatch);
+  assert(interceptedBatchCalls.length === 3, 'createRaindropsBatch automatically chunks 245 items into 3 requests');
+  assert(interceptedBatchCalls[0].body.items.length === 100, 'Batch 1 contains 100 items');
+  assert(interceptedBatchCalls[1].body.items.length === 100, 'Batch 2 contains 100 items');
+  assert(interceptedBatchCalls[2].body.items.length === 45, 'Batch 3 contains remaining 45 items');
+  assert(largeResult.items.length === 245, 'Aggregates all 245 items across batches');
+
+  RaindropAPI.request = origReq;
+
+  // 2. Shift+Click Range Selection Tests
+  const { applyShiftClickRangeSelection } = require(path.join(EXT_DIR, 'popup/popup.js'));
+  assert(typeof applyShiftClickRangeSelection === 'function', 'popup.js exports applyShiftClickRangeSelection');
+
+  // Test range selection algorithm (forward, reverse, select/deselect)
+  const testCbs = Array.from({ length: 10 }, (_, i) => ({ index: i, checked: true }));
+
+  // First click on index 2 (uncheck)
+  let lastIndex = applyShiftClickRangeSelection(testCbs, 2, -1, false);
+  assert(lastIndex === 2, 'Single click returns index 2 as new lastIndex');
+  assert(testCbs[2].checked === false && testCbs[1].checked === true && testCbs[3].checked === true, 'Single click updates only index 2');
+
+  // Shift+click on index 8 (targetState false) -> indices 2 through 8 all unchecked
+  lastIndex = applyShiftClickRangeSelection(testCbs, 8, 2, false);
+  assert(lastIndex === 8, 'Shift+click updates lastIndex to 8');
+  assert(
+    testCbs[0].checked === true &&
+    testCbs[1].checked === true &&
+    testCbs[2].checked === false &&
+    testCbs[3].checked === false &&
+    testCbs[4].checked === false &&
+    testCbs[5].checked === false &&
+    testCbs[6].checked === false &&
+    testCbs[7].checked === false &&
+    testCbs[8].checked === false &&
+    testCbs[9].checked === true,
+    'Shift+click forward (2 through 8) unchecks all intermediate checkboxes'
+  );
+
+  // Shift+click reverse: user clicks index 7 without shift, then Shift+clicks index 3 (targetState true)
+  testCbs[7].checked = true;
+  lastIndex = applyShiftClickRangeSelection(testCbs, 3, 7, true);
+  assert(lastIndex === 3, 'Reverse Shift+click updates lastIndex to 3');
+  assert(
+    testCbs[3].checked === true &&
+    testCbs[4].checked === true &&
+    testCbs[5].checked === true &&
+    testCbs[6].checked === true &&
+    testCbs[7].checked === true,
+    'Shift+click reverse (7 down to 3) checks all intermediate checkboxes'
+  );
+
+  // 3. Background Service Worker Batch Saving & Tab Closing Safety
+  assert(typeof backgroundWorker.handleSaveTabsBatch === 'function', 'background.js exports handleSaveTabsBatch');
+
+  await RaindropStorage.setToken('bg-worker-token');
+  let removedTabIds = [];
+  global.chrome.tabs = global.chrome.tabs || {};
+  global.chrome.tabs.remove = async (ids) => {
+    removedTabIds = Array.isArray(ids) ? [...ids] : [ids];
+  };
+
+  let mockBatchCalled = false;
+  let mockBatchItems = null;
+  const originalBatch = RaindropAPI.createRaindropsBatch;
+  RaindropAPI.createRaindropsBatch = async (token, items) => {
+    mockBatchCalled = true;
+    mockBatchItems = items;
+    return {
+      result: true,
+      items: items.map((it, idx) => ({ _id: 8000 + idx, link: it.url }))
+    };
+  };
+
+  // Test successful batch save in background worker
+  removedTabIds = [];
+  const bgBatchResult = await backgroundWorker.handleSaveTabsBatch({
+    items: [
+      { url: 'https://page-1.com', title: 'Page 1', tabId: 201 },
+      { url: 'https://page-2.com', title: 'Page 2', tabId: 202 }
+    ],
+    closeTabIds: [201, 202]
+  });
+
+  assert(bgBatchResult.success === true, 'handleSaveTabsBatch succeeds');
+  assert(mockBatchCalled === true, 'handleSaveTabsBatch invokes RaindropAPI.createRaindropsBatch');
+  assert(mockBatchItems.length === 2, 'Batch items passed to createRaindropsBatch');
+  assert(removedTabIds.length === 2 && removedTabIds.includes(201) && removedTabIds.includes(202), 'Tabs closed after batch save completes');
+
+  // SAFETY TEST: If Raindrop API throws error, tabs MUST NOT be closed!
+  removedTabIds = [];
+  RaindropAPI.createRaindropsBatch = async () => {
+    throw new Error('Raindrop API 500 Internal Server Error');
+  };
+
+  try {
+    await backgroundWorker.handleSaveTabsBatch({
+      items: [{ url: 'https://dont-lose-me.com', title: 'Critical Tab' }],
+      closeTabIds: [777]
+    });
+    assert(false, 'Should throw error when API fails');
+  } catch (apiErr) {
+    assert(apiErr.message.includes('500'), 'Error caught when API fails');
+  }
+  assert(removedTabIds.length === 0, 'SAFETY: Tabs are NOT closed when batch API fails');
+
+  // Test chrome.runtime.onMessage saveTabsBatch action
+  RaindropAPI.createRaindropsBatch = async (token, items) => ({
+    result: true,
+    items: items.map((it, i) => ({ _id: 9000 + i, link: it.url }))
+  });
+
+  // Re-register background message listener with runtime mock
+  const registeredListeners = [];
+  global.chrome.runtime = {
+    onMessage: {
+      addListener: (fn) => registeredListeners.push(fn)
+    }
+  };
+
+  // Clear module cache and reload background.js to wire up runtime listener
+  delete require.cache[require.resolve(path.join(EXT_DIR, 'background.js'))];
+  const reloadedBg = require(path.join(EXT_DIR, 'background.js'));
+
+  assert(registeredListeners.length > 0, 'background.js registers runtime.onMessage listener');
+
+  let batchMessageResponse = null;
+  for (const listener of registeredListeners) {
+    const keepOpen = listener(
+      {
+        action: 'saveTabsBatch',
+        items: [{ url: 'https://msg-test.com', title: 'Test Tab' }],
+        closeTabIds: []
+      },
+      {},
+      (response) => { batchMessageResponse = response; }
+    );
+    if (keepOpen) break;
+  }
+
+  // Wait for async response
+  await new Promise(r => setTimeout(r, 60));
+  assert(batchMessageResponse !== null, 'onMessage handler invoked sendResponse');
+  assert(batchMessageResponse.success === true, 'onMessage returns success: true');
+  assert(batchMessageResponse.count === 1, 'onMessage reports saved count: 1');
+
+  // Restore API method and token
+  RaindropAPI.createRaindropsBatch = originalBatch;
+  await RaindropStorage.clearToken();
 
   console.log(`\n========================================`);
   console.log(`Verification Complete: ${passed} Passed, ${failed} Failed`);

@@ -10,6 +10,26 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Applies Shift+Click range selection across a list of checkboxes
+ */
+function applyShiftClickRangeSelection(checkboxes, clickedIndex, lastIndex, targetState) {
+  if (lastIndex === null || lastIndex === undefined || lastIndex < 0 || clickedIndex === lastIndex) {
+    if (checkboxes && checkboxes[clickedIndex]) {
+      checkboxes[clickedIndex].checked = targetState;
+    }
+    return clickedIndex;
+  }
+  const start = Math.min(lastIndex, clickedIndex);
+  const end = Math.max(lastIndex, clickedIndex);
+  for (let i = start; i <= end; i++) {
+    if (checkboxes && checkboxes[i]) {
+      checkboxes[i].checked = targetState;
+    }
+  }
+  return clickedIndex;
+}
+
 class TagChipsComponent {
   constructor({
     container,
@@ -931,7 +951,31 @@ if (typeof document !== 'undefined') {
     }
   }
 
+  let lastCheckedTabIndex = -1;
+
+  function handleTabCheckboxClick(e, cb) {
+    const checkboxes = Array.from(openTabsList.querySelectorAll('.tab-checkbox'));
+    const currentIndex = checkboxes.indexOf(cb);
+    if (currentIndex === -1) return;
+
+    const targetState = cb.checked;
+
+    if (e.shiftKey && lastCheckedTabIndex >= 0 && lastCheckedTabIndex < checkboxes.length) {
+      lastCheckedTabIndex = applyShiftClickRangeSelection(
+        checkboxes,
+        currentIndex,
+        lastCheckedTabIndex,
+        targetState
+      );
+    } else {
+      lastCheckedTabIndex = currentIndex;
+    }
+
+    updateTabsCounter();
+  }
+
   function renderOpenTabsList() {
+    lastCheckedTabIndex = -1;
     openTabsList.innerHTML = '';
     if (openTabsData.length === 0) {
       openTabsList.innerHTML = '<div style="padding: 12px; color: var(--text-muted); font-size: 12px;">No saveable web tabs found.</div>';
@@ -939,21 +983,23 @@ if (typeof document !== 'undefined') {
       return;
     }
 
-    openTabsData.forEach((tab) => {
+    openTabsData.forEach((tab, index) => {
       const row = document.createElement('label');
       row.className = 'tab-row-item';
 
       const faviconSrc = tab.favIconUrl || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%236b7280"><circle cx="12" cy="12" r="10"/></svg>';
 
       row.innerHTML = `
-        <input type="checkbox" class="tab-checkbox" data-tab-id="${tab.id}" checked />
+        <input type="checkbox" class="tab-checkbox" data-tab-id="${tab.id}" data-index="${index}" checked />
         <img class="tab-favicon" src="${escapeHtml(faviconSrc)}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%236b7280%22><circle cx=%2212%22 cy=%2212%22 r=%2210%22/></svg>'" />
         <div class="tab-info-text">
           <div class="tab-title" title="${escapeHtml(tab.title || tab.url)}">${escapeHtml(tab.title || tab.url)}</div>
         </div>
       `;
 
-      row.querySelector('.tab-checkbox').addEventListener('change', updateTabsCounter);
+      const cb = row.querySelector('.tab-checkbox');
+      cb.addEventListener('click', (e) => handleTabCheckboxClick(e, cb));
+      cb.addEventListener('change', updateTabsCounter);
       openTabsList.appendChild(row);
     });
 
@@ -986,6 +1032,7 @@ if (typeof document !== 'undefined') {
     openTabsList.querySelectorAll('.tab-checkbox').forEach(cb => {
       cb.checked = checked;
     });
+    lastCheckedTabIndex = -1;
     updateTabsCounter();
   });
 
@@ -993,7 +1040,7 @@ if (typeof document !== 'undefined') {
     switchView('main');
   });
 
-  // Execute Save Tabs
+  // Execute Save Tabs via background batch saving
   executeSaveTabsBtn.addEventListener('click', async () => {
     const selectedIds = getSelectedTabIds();
     if (selectedIds.length === 0 || !currentToken) return;
@@ -1007,51 +1054,68 @@ if (typeof document !== 'undefined') {
 
     const tabsToSave = openTabsData.filter(t => selectedIds.includes(t.id));
     const shouldClose = closeTabsCheckbox.checked;
+    const countToSave = tabsToSave.length;
 
-    let savedCount = 0;
+    saveTabsBtnText.textContent = `Saving ${countToSave} tabs...`;
+
+    // Prepare batch items
+    const items = tabsToSave.map(tab => ({
+      url: tab.url,
+      title: tab.title || tab.url,
+      tags: tags,
+      collectionId: selectedCollectionId,
+      tabId: tab.id
+    }));
+
+    const closeTabIds = shouldClose ? selectedIds : [];
+
     try {
-      for (let i = 0; i < tabsToSave.length; i++) {
-        const tab = tabsToSave[i];
-        saveTabsBtnText.textContent = `Saving ${i + 1}/${tabsToSave.length}...`;
-        await RaindropAPI.createRaindrop(currentToken, {
-          url: tab.url,
-          title: tab.title,
-          tags: tags,
-          collectionId: selectedCollectionId
-        });
-        savedCount++;
-
-        // Update tab badge if tab id available
-        if (tab.id) {
-          if (typeof chrome !== 'undefined' && chrome.action?.setBadgeText) {
-            chrome.action.setBadgeText({ tabId: tab.id, text: '✓' });
-            chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#10B981' });
-            if (typeof chrome.action.setBadgeTextColor === 'function') {
-              try { chrome.action.setBadgeTextColor({ tabId: tab.id, color: '#ffffff' }); } catch (e) {}
-            }
-            chrome.action.setTitle({ tabId: tab.id, title: 'Saved in Raindrop (Account B)' });
-          }
-          if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-            chrome.runtime.sendMessage({ action: 'setTabBadge', tabId: tab.id }).catch(() => {});
-          }
+      // Offload to background service worker for reliable batch saving
+      await new Promise((resolve, reject) => {
+        if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {
+          // Fallback if background worker messaging not available
+          RaindropAPI.createRaindropsBatch(currentToken, items)
+            .then(res => {
+              if (shouldClose && chrome?.tabs?.remove) {
+                chrome.tabs.remove(selectedIds).catch(() => {});
+              }
+              resolve(res);
+            })
+            .catch(reject);
+          return;
         }
-      }
+
+        chrome.runtime.sendMessage({
+          action: 'saveTabsBatch',
+          items,
+          closeTabIds
+        }, (res) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else if (res && res.success === false) {
+            reject(new Error(res.error || 'Failed to save tabs batch'));
+          } else {
+            resolve(res);
+          }
+        });
+      });
 
       if (tags.length > 0) {
         await RaindropStorage.addRecentTags(tags);
         await loadRecentTags();
       }
 
-      if (shouldClose && chrome?.tabs?.remove) {
-        await chrome.tabs.remove(selectedIds);
-      }
-
-      showBanner(`Saved ${savedCount} tabs to ${selectedCollectionTitle}!`, 'info', 4000);
+      saveTabsBtnText.textContent = 'Saved!';
+      showBanner(`Saved ${countToSave} tabs to ${selectedCollectionTitle}!`, 'info', 4000);
       tabsTagsComponent.clear();
-      switchView('main');
+
+      setTimeout(() => {
+        switchView('main');
+      }, 500);
     } catch (err) {
-      console.error('Failed while saving tabs:', err);
-      showBanner(`Saved ${savedCount}/${tabsToSave.length} tabs. Error: ${err.message}`, 'error', 6000);
+      console.error('Failed while saving tabs batch:', err);
+      showBanner(`Failed to save tabs: ${err.message}`, 'error', 6000);
+      saveTabsBtnText.textContent = `Save ${countToSave} tabs`;
     } finally {
       executeSaveTabsBtn.disabled = false;
       saveTabsSpinner.classList.add('hidden');
@@ -1483,5 +1547,5 @@ if (typeof document !== 'undefined') {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { TagChipsComponent, escapeHtml };
+  module.exports = { TagChipsComponent, escapeHtml, applyShiftClickRangeSelection };
 }

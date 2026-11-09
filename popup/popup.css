@@ -992,6 +992,8 @@ body {
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: background-color 0.1s;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .tab-row-item:hover {
   background-color: var(--bg-hover);
