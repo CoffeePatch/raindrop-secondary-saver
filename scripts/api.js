@@ -168,6 +168,20 @@ const RaindropAPI = {
   },
 
   /**
+   * Fetch user statistics (collection counts, including Unsorted -1 and Trash -99)
+   * Calls GET /user/stats
+   */
+  async getUserStats(token) {
+    try {
+      const data = await this.request('/user/stats', token);
+      return data?.items || [];
+    } catch (e) {
+      console.warn('Failed to fetch user stats:', e);
+      return [];
+    }
+  },
+
+  /**
    * Fetch root and child collections, ordered hierarchically
    */
   async getCollections(token) {
@@ -316,7 +330,7 @@ const RaindropAPI = {
   /**
    * Create a new bookmark (Raindrop)
    */
-  async createRaindrop(token, { url, title, excerpt = '', note = '', tags = [], important = false, collectionId = 0 }) {
+  async createRaindrop(token, { url, title, excerpt = '', note = '', tags = [], important = false, reminder = null, collectionId = 0 }) {
     if (!url) {
       throw new RaindropAPIError('URL is required to save bookmark.', 400);
     }
@@ -326,7 +340,7 @@ const RaindropAPI = {
       : 0;
 
     const cleanTags = Array.isArray(tags)
-      ? Array.from(new Set(tags.map(t => String(t).trim()).filter(Boolean)))
+      ? Array.from(new Set(tags.map(t => String(t).trim().replace(/^#+/, '')).filter(Boolean)))
       : [];
 
     const payload = {
@@ -337,10 +351,16 @@ const RaindropAPI = {
       important: Boolean(important),
       tags: cleanTags,
       collection: {
-        $id: targetCollectionId >= 0 ? targetCollectionId : 0
+        $id: targetCollectionId
       },
       pleaseParse: {}
     };
+
+    if (reminder) {
+      payload.reminder = typeof reminder === 'object' && reminder?.date
+        ? reminder
+        : { date: new Date(Date.now() + 86400000).toISOString() };
+    }
 
     const res = await this.request('/raindrop', token, {
       method: 'POST',
@@ -366,12 +386,16 @@ const RaindropAPI = {
   /**
    * Update an existing bookmark
    */
-  async updateRaindrop(token, id, { url, title, excerpt = '', note = '', tags = [], important = false, collectionId = 0 }) {
+  async updateRaindrop(token, id, { url, title, excerpt = '', note = '', tags = [], important = false, reminder = null, collectionId = 0 }) {
     if (!id) throw new RaindropAPIError('Bookmark ID required for update.', 400);
 
     const cleanTags = Array.isArray(tags)
-      ? Array.from(new Set(tags.map(t => String(t).trim()).filter(Boolean)))
+      ? Array.from(new Set(tags.map(t => String(t).trim().replace(/^#+/, '')).filter(Boolean)))
       : [];
+
+    const targetCollectionId = (collectionId !== undefined && collectionId !== null && !isNaN(Number(collectionId)))
+      ? Number(collectionId)
+      : 0;
 
     const payload = {
       link: url,
@@ -381,9 +405,19 @@ const RaindropAPI = {
       important: Boolean(important),
       tags: cleanTags,
       collection: {
-        $id: Number(collectionId) >= 0 ? Number(collectionId) : 0
+        $id: targetCollectionId
       }
     };
+
+    if (reminder !== undefined) {
+      if (reminder && typeof reminder === 'object' && reminder.date) {
+        payload.reminder = reminder;
+      } else if (reminder) {
+        payload.reminder = { date: new Date(Date.now() + 86400000).toISOString() };
+      } else {
+        payload.reminder = null;
+      }
+    }
 
     const res = await this.request(`/raindrop/${id}`, token, {
       method: 'PUT',

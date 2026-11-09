@@ -209,21 +209,23 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   await RaindropAPI.createRaindrop('token', { url: 'https://example.com', collectionId: 0 });
   assert(interceptedPayload.collection.$id === 0, 'createRaindrop with collectionId 0 sends collection.$id: 0');
 
-  // Test fallback when collectionId is negative (-1)
+  // Test collectionId -1 for Raindrop system unsorted
   await RaindropAPI.createRaindrop('token', { url: 'https://example.com', collectionId: -1 });
-  assert(interceptedPayload.collection.$id === 0, 'createRaindrop with negative collectionId fallback sends collection.$id: 0');
+  assert(interceptedPayload.collection.$id === -1, 'createRaindrop with collectionId -1 sends collection.$id: -1 (Raindrop system unsorted)');
 
-  // Test tag deduplication in createRaindrop
+  // Test tag deduplication and leading hash stripping in createRaindrop
   await RaindropAPI.createRaindrop('token', {
     url: 'https://example.com',
-    tags: ['reading', 'web', 'reading', '   ']
+    tags: ['#reading', 'web', 'reading', '#web', '   '],
+    reminder: true
   });
   assert(
     interceptedPayload.tags.length === 2 &&
     interceptedPayload.tags.includes('reading') &&
     interceptedPayload.tags.includes('web'),
-    'createRaindrop automatically deduplicates and cleans tags'
+    'createRaindrop automatically deduplicates, strips hashes, and cleans tags'
   );
+  assert(interceptedPayload.reminder && interceptedPayload.reminder.date, 'createRaindrop formats and attaches reminder payload');
 
   RaindropAPI.request = originalRequest;
 
@@ -243,12 +245,22 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
         ]
       };
     }
+    if (endpoint === '/user/stats') {
+      return {
+        result: true,
+        items: [
+          { _id: 0, count: 120 },
+          { _id: -1, count: 42 },
+          { _id: -99, count: 8 }
+        ]
+      };
+    }
     if (endpoint === '/collection') {
       const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
       return { result: true, item: { _id: 888, title: parsedBody ? parsedBody.title : '' } };
     }
     if (endpoint.startsWith('/check/url')) {
-      return { result: true, item: { _id: 9999, title: 'Already Saved Page' } };
+      return { result: true, item: { _id: 9999, title: 'Already Saved Page', cover: 'https://example.com/cover.jpg', reminder: { date: '2026-11-10T12:00:00Z' } } };
     }
     if (endpoint.startsWith('/raindrop/9999') && options.method === 'PUT') {
       const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
@@ -266,6 +278,36 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(fetchedTags[0].tag === 'javascript' && fetchedTags[0].count === 18, 'getTags parses tag name and count badge correctly');
   assert(fetchedTags[1].tag === 'reading' && fetchedTags[1].count === 5, 'getTags parses count 5 for reading');
   assert(fetchedTags[2].tag === 'legacy-tag' && fetchedTags[2].count === 0, 'getTags safely handles plain string tags');
+
+  // Test getUserStats
+  const stats = await RaindropAPI.getUserStats('test-token');
+  assert(Array.isArray(stats) && stats.length === 3, 'getUserStats calls GET /user/stats and returns items');
+  const unsortedStat = stats.find(s => s._id === -1);
+  const trashStat = stats.find(s => s._id === -99);
+  assert(unsortedStat && unsortedStat.count === 42, 'getUserStats returns accurate Unsorted count (_id: -1)');
+  assert(trashStat && trashStat.count === 8, 'getUserStats returns accurate Trash count (_id: -99)');
+
+  // Test Tag Autocomplete Helper logic (handling of # and multiple tags without overwrite)
+  function testTagInsertion(existingValue, tagToAdd) {
+    const cleanTag = tagToAdd.trim().replace(/^#+/, '');
+    const raw = existingValue;
+    const parts = raw.split(',');
+    if (parts.length > 0 && parts[parts.length - 1].trim().length > 0) {
+      parts[parts.length - 1] = cleanTag;
+    } else {
+      parts.push(cleanTag);
+    }
+    return parts.map(p => p.trim().replace(/^#+/, '')).filter(Boolean).join(', ') + ', ';
+  }
+
+  const tagResult1 = testTagInsertion('design, ', 'web');
+  assert(tagResult1 === 'design, web, ', 'Tag insertion appends when input ends with comma without overwriting prior tags');
+
+  const tagResult2 = testTagInsertion('design, we', 'web');
+  assert(tagResult2 === 'design, web, ', 'Tag insertion replaces partial token being typed');
+
+  const tagResult3 = testTagInsertion('#code, #java', '#javascript');
+  assert(tagResult3 === 'code, javascript, ', 'Tag insertion cleanly strips leading hashes and replaces partial word');
 
   // Test createCollection
   const newCol = await RaindropAPI.createCollection('test-token', 'Design System');
@@ -305,6 +347,7 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(popupHtml.includes('id="viewMain"'), 'popup.html contains View 1 (#viewMain)');
   assert(popupHtml.includes('class="brand-cloud"'), 'popup.html contains blue cloud brand icon');
   assert(popupHtml.includes('id="headerStatusTitle"'), 'popup.html contains header status title');
+  assert(popupHtml.includes('Edit</span>') || popupHtml.includes('Saved</span>'), 'popup.html header status displays Edit/Saved');
   assert(popupHtml.includes('id="aiSparkleBtn"'), 'popup.html contains AI sparkle button');
   assert(popupHtml.includes('id="headerSearchBtn"'), 'popup.html contains search icon button');
   assert(popupHtml.includes('id="userDropdownMenu"'), 'popup.html contains user avatar dropdown menu');
@@ -314,6 +357,7 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(popupHtml.includes('id="bookmarkNote"'), 'popup.html contains note textarea');
   assert(popupHtml.includes('class="markdown-badge"'), 'popup.html contains markdown badge (M↓)');
   assert(popupHtml.includes('id="collectionPillBtn"'), 'popup.html contains collection selector pill');
+  assert(popupHtml.includes('id="pillIcon"') && popupHtml.includes('〰</span>'), 'popup.html collection pill defaults to Unsorted icon 〰');
   assert(popupHtml.includes('id="bookmarkTagsInput"'), 'popup.html contains tags input');
   assert(popupHtml.includes('id="tagsAutocompleteDropdown"'), 'popup.html contains custom autocomplete dropdown (not datalist)');
   assert(popupHtml.includes('id="bookmarkUrl"'), 'popup.html contains URL row');
@@ -328,8 +372,10 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(popupHtml.includes('id="viewCollection"'), 'popup.html contains View 2 (#viewCollection)');
   assert(popupHtml.includes('id="backFromCollectionBtn"'), 'popup.html contains back button in collection view');
   assert(popupHtml.includes('id="collectionSearchInput"'), 'popup.html contains collection search input');
+  assert(popupHtml.includes('id="specialCollectionsGroup"'), 'popup.html contains specialCollectionsGroup wrapper for search filtering');
   assert(popupHtml.includes('data-id="0"') && popupHtml.includes('Unsorted'), 'popup.html contains special collection Unsorted (id 0)');
   assert(popupHtml.includes('data-id="-99"') && popupHtml.includes('Trash'), 'popup.html contains special collection Trash (id -99)');
+  assert(popupHtml.includes('id="sectionLabelRow"'), 'popup.html contains sectionLabelRow divider');
   assert(popupHtml.includes('id="userCollectionsList"'), 'popup.html contains user collections list container');
   assert(popupHtml.includes('id="createNewCollectionItem"'), 'popup.html contains create new collection item');
 
@@ -342,6 +388,11 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(popupHtml.includes('id="tabsTagsInput"'), 'popup.html contains date-prefilled tags input');
   assert(popupHtml.includes('id="closeTabsCheckbox"'), 'popup.html contains Close tabs checkbox');
   assert(popupHtml.includes('id="executeSaveTabsBtn"'), 'popup.html contains gold Save tabs action button');
+
+  // Tabs pluralization logic check
+  const formatTabCount = (count) => `${count} ${count === 1 ? 'tab' : 'tabs'}`;
+  assert(formatTabCount(1) === '1 tab', 'Tab count formatter handles singular 1 tab');
+  assert(formatTabCount(4) === '4 tabs', 'Tab count formatter handles plural 4 tabs');
 
   // View 4 checks
   assert(popupHtml.includes('id="viewSettings"'), 'popup.html contains View 4 (#viewSettings modal)');

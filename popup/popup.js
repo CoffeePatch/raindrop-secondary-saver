@@ -55,8 +55,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // View 2 (Collection Subview) Elements
   const backFromCollectionBtn = document.getElementById('backFromCollectionBtn');
   const collectionSearchInput = document.getElementById('collectionSearchInput');
+  const specialCollectionsGroup = document.getElementById('specialCollectionsGroup');
   const unsortedCountBadge = document.getElementById('unsortedCountBadge');
   const trashCountBadge = document.getElementById('trashCountBadge');
+  const sectionLabelRow = document.getElementById('sectionLabelRow');
   const userCollectionsList = document.getElementById('userCollectionsList');
   const createNewCollectionItem = document.getElementById('createNewCollectionItem');
   const createCollectionText = document.getElementById('createCollectionText');
@@ -136,9 +138,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     noticeBanner.textContent = '';
   }
 
+  function markAsEdited() {
+    if (headerStatusTitle.textContent !== 'Edit') {
+      headerStatusTitle.textContent = 'Edit';
+    }
+    if (saveBtnText.textContent !== 'Save') {
+      saveBtnText.textContent = 'Save';
+    }
+  }
+
+  // Monitor form input changes to update status to "Edit"
+  [bookmarkTitle, bookmarkExcerpt, bookmarkNote, bookmarkTagsInput, bookmarkUrl].forEach(el => {
+    el.addEventListener('input', markAsEdited);
+  });
+
   function switchView(targetView) {
     hideBanner();
     userDropdownMenu.classList.add('hidden');
+
+    const returningFromCollectionToTabs = (targetView === 'tabs' && previousView === 'tabs');
 
     // Manage history for back navigation
     if (targetView === 'collection') {
@@ -163,7 +181,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else if (targetView === 'tabs') {
       viewTabs.classList.remove('hidden');
       viewTabs.classList.add('active');
-      initSaveTabsView();
+      // If returning from collection picker, preserve existing tab list & user checkbox selections!
+      if (!returningFromCollectionToTabs || openTabsData.length === 0) {
+        initSaveTabsView();
+      }
     } else if (targetView === 'settings') {
       viewSettings.classList.remove('hidden');
       viewSettings.classList.add('active');
@@ -193,7 +214,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     currentUser = user;
     const name = user.fullName || user.email || 'Account B';
     const firstLetter = name.trim().charAt(0).toUpperCase() || 'B';
-    userAvatarCircle.textContent = firstLetter;
+
+    if (user.avatar) {
+      userAvatarCircle.innerHTML = `<img src="${escapeHtml(user.avatar)}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" alt="${escapeHtml(name)}" />`;
+    } else {
+      userAvatarCircle.textContent = firstLetter;
+    }
+
     menuUserName.textContent = name;
     menuUserEmail.textContent = user.email ? `${user.email} (Account B)` : 'Raindrop Account B';
   }
@@ -214,21 +241,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   function getCurrentTagQuery() {
     const text = bookmarkTagsInput.value;
     const parts = text.split(',');
-    return parts[parts.length - 1].trim();
+    const current = parts[parts.length - 1].trim();
+    return current.replace(/^#+/, '');
   }
 
   function insertTag(tagToAdd) {
+    const cleanTag = tagToAdd.trim().replace(/^#+/, '');
+    if (!cleanTag) return;
+
     const raw = bookmarkTagsInput.value;
-    const parts = raw.split(',').map(p => p.trim()).filter(Boolean);
-    if (parts.length > 0) {
-      // Replace the current partial word with chosen tag
-      parts[parts.length - 1] = tagToAdd;
+    const parts = raw.split(',');
+    // If last slot was an in-progress tag, replace it; otherwise append
+    if (parts.length > 0 && parts[parts.length - 1].trim().length > 0) {
+      parts[parts.length - 1] = cleanTag;
     } else {
-      parts.push(tagToAdd);
+      parts.push(cleanTag);
     }
-    bookmarkTagsInput.value = parts.join(', ') + ', ';
+
+    const cleanList = parts.map(p => p.trim().replace(/^#+/, '')).filter(Boolean);
+    bookmarkTagsInput.value = cleanList.join(', ') + ', ';
     bookmarkTagsInput.focus();
     hideTagsDropdown();
+    markAsEdited();
   }
 
   function renderTagsAutocomplete() {
@@ -237,7 +271,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       bookmarkTagsInput.value
         .split(',')
         .slice(0, -1)
-        .map(t => t.trim().toLowerCase())
+        .map(t => t.trim().replace(/^#+/, '').toLowerCase())
         .filter(Boolean)
     );
 
@@ -260,7 +294,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Option to add new tag
       const createItem = document.createElement('div');
       createItem.className = 'tag-dropdown-item';
-      createItem.innerHTML = `<span class="tag-item-name">+ Add tag "<strong>${escapeHtml(query)}</strong>"</span>`;
+      createItem.innerHTML = `<span class="tag-item-name">+ Add tag "<strong>#${escapeHtml(query)}</strong>"</span>`;
+      createItem.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        insertTag(query);
+      });
       createItem.addEventListener('click', () => insertTag(query));
       tagsDropdownList.appendChild(createItem);
       showTagsDropdown();
@@ -275,6 +313,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         <span class="tag-item-name"># ${escapeHtml(item.tag)}</span>
         <span class="tag-item-count">${item.count}</span>
       `;
+      row.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        insertTag(item.tag);
+      });
       row.addEventListener('click', () => insertTag(item.tag));
       tagsDropdownList.appendChild(row);
     });
@@ -310,22 +352,42 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   bookmarkTagsInput.addEventListener('keydown', (e) => {
     const items = tagsDropdownList.querySelectorAll('.tag-dropdown-item');
-    if (tagsAutocompleteDropdown.classList.contains('hidden') || items.length === 0) {
-      return;
-    }
+    const isDropdownOpen = !tagsAutocompleteDropdown.classList.contains('hidden') && items.length > 0;
 
     if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      activeAutocompleteIndex = (activeAutocompleteIndex + 1) % items.length;
-      updateActiveAutocompleteItem(items);
+      if (isDropdownOpen) {
+        e.preventDefault();
+        activeAutocompleteIndex = (activeAutocompleteIndex + 1) % items.length;
+        updateActiveAutocompleteItem(items);
+      }
     } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      activeAutocompleteIndex = (activeAutocompleteIndex - 1 + items.length) % items.length;
-      updateActiveAutocompleteItem(items);
-    } else if (e.key === 'Enter' || e.key === 'Tab') {
-      if (activeAutocompleteIndex >= 0 && items[activeAutocompleteIndex]) {
+      if (isDropdownOpen) {
+        e.preventDefault();
+        activeAutocompleteIndex = (activeAutocompleteIndex - 1 + items.length) % items.length;
+        updateActiveAutocompleteItem(items);
+      }
+    } else if (e.key === 'Enter') {
+      // If typing a tag, commit it rather than submitting the form prematurely
+      if (isDropdownOpen && activeAutocompleteIndex >= 0 && items[activeAutocompleteIndex]) {
         e.preventDefault();
         items[activeAutocompleteIndex].click();
+      } else if (isDropdownOpen && items.length > 0) {
+        e.preventDefault();
+        items[0].click();
+      } else {
+        const query = getCurrentTagQuery();
+        if (query) {
+          e.preventDefault();
+          insertTag(query);
+        }
+      }
+    } else if (e.key === 'Tab') {
+      if (isDropdownOpen && items.length > 0) {
+        e.preventDefault();
+        const target = (activeAutocompleteIndex >= 0 && items[activeAutocompleteIndex])
+          ? items[activeAutocompleteIndex]
+          : items[0];
+        target.click();
       }
     } else if (e.key === 'Escape') {
       hideTagsDropdown();
@@ -357,9 +419,27 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function loadCollections() {
     if (!currentToken) return;
     try {
-      rawCollections = await RaindropAPI.getCollections(currentToken);
-      // rawCollections[0] is Unsorted (id: 0)
+      const [colls, stats] = await Promise.all([
+        RaindropAPI.getCollections(currentToken),
+        RaindropAPI.getUserStats(currentToken).catch(() => [])
+      ]);
+
+      rawCollections = colls;
       userCollections = rawCollections.filter(c => c.id !== 0 && c.id !== -99);
+
+      // Populate special collection counts from GET /user/stats
+      // Raindrop returns _id: -1 (Unsorted) and _id: -99 (Trash)
+      const unsortedStat = stats.find(s => s._id === -1 || s._id === 0);
+      const trashStat = stats.find(s => s._id === -99);
+      const unsortedCount = unsortedStat ? unsortedStat.count || 0 : 0;
+      const trashCount = trashStat ? trashStat.count || 0 : 0;
+
+      const unsortedObj = rawCollections.find(c => c.id === 0);
+      if (unsortedObj) {
+        unsortedObj.count = unsortedCount;
+      }
+      if (unsortedCountBadge) unsortedCountBadge.textContent = unsortedCount;
+      if (trashCountBadge) trashCountBadge.textContent = trashCount;
 
       // Check last used collection
       const lastId = await RaindropStorage.getLastCollectionId();
@@ -381,10 +461,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     userCollectionsList.innerHTML = '';
     const term = (searchTerm || '').trim().toLowerCase();
 
-    // Check special collections counts
-    const unsortedObj = rawCollections.find(c => c.id === 0);
-    unsortedCountBadge.textContent = unsortedObj ? unsortedObj.count || 0 : 0;
-    trashCountBadge.textContent = 0;
+    // Toggle special collections (Unsorted and Trash) and divider row based on search
+    const unsortedMatch = !term || 'unsorted'.includes(term);
+    const trashMatch = !term || 'trash'.includes(term);
+
+    const unsortedEl = viewCollection.querySelector('.special-item[data-id="0"]');
+    const trashEl = viewCollection.querySelector('.special-item[data-id="-99"]');
+
+    if (unsortedEl) {
+      unsortedEl.style.display = unsortedMatch ? 'flex' : 'none';
+      unsortedEl.classList.toggle('active-selected', selectedCollectionId === 0);
+    }
+    if (trashEl) {
+      trashEl.style.display = trashMatch ? 'flex' : 'none';
+      trashEl.classList.toggle('active-selected', selectedCollectionId === -99);
+    }
+
+    if (specialCollectionsGroup) {
+      specialCollectionsGroup.style.display = (unsortedMatch || trashMatch) ? 'flex' : 'none';
+    }
+    if (sectionLabelRow) {
+      sectionLabelRow.style.display = term ? 'none' : 'block';
+    }
 
     // Filter user collections
     const filtered = userCollections.filter(coll => {
@@ -459,6 +557,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderCollectionsList(collectionSearchInput.value);
   });
 
+  // Enter key in collection search to create or select
+  collectionSearchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const term = collectionSearchInput.value.trim();
+      if (!term) return;
+
+      if (!createNewCollectionItem.classList.contains('hidden')) {
+        createNewCollectionItem.click();
+      } else {
+        const firstMatch = userCollectionsList.querySelector('.collection-item');
+        if (firstMatch) firstMatch.click();
+      }
+    }
+  });
+
   // Create new collection
   createNewCollectionItem.addEventListener('click', async () => {
     const title = collectionSearchInput.value.trim();
@@ -502,7 +616,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Set prefilled date tag: e.g. #11/9/2026
     const now = new Date();
     const dateTag = `#${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`;
-    tabsTagsInput.value = dateTag;
+    if (!tabsTagsInput.value) {
+      tabsTagsInput.value = dateTag;
+    }
 
     try {
       const tabs = await chrome.tabs.query({ currentWindow: true });
@@ -523,7 +639,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    openTabsData.forEach((tab, i) => {
+    openTabsData.forEach((tab) => {
       const row = document.createElement('label');
       row.className = 'tab-row-item';
 
@@ -550,11 +666,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function updateTabsCounter() {
+    const total = openTabsData.length;
     const selectedIds = getSelectedTabIds();
     const count = selectedIds.length;
-    selectedTabsCounter.textContent = `${count} tabs`;
-    saveTabsBtnText.textContent = `Save ${count} tabs`;
+    const label = `${count} ${count === 1 ? 'tab' : 'tabs'}`;
+
+    selectedTabsCounter.textContent = label;
+    saveTabsBtnText.textContent = `Save ${label}`;
     executeSaveTabsBtn.disabled = count === 0;
+
+    if (selectAllTabsCheckbox) {
+      selectAllTabsCheckbox.checked = total > 0 && count === total;
+      selectAllTabsCheckbox.indeterminate = count > 0 && count < total;
+    }
   }
 
   selectAllTabsCheckbox.addEventListener('change', () => {
@@ -651,7 +775,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (item) {
         existingBookmark = item;
         headerStatusTitle.textContent = 'Saved';
-        saveBtnText.textContent = 'Save';
+        saveBtnText.textContent = 'Saved ✓';
         deleteBookmarkBtn.classList.remove('hidden');
 
         if (item.title) bookmarkTitle.value = item.title;
@@ -663,6 +787,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (item.important) {
           setFavorite(true);
         }
+        if (item.reminder?.date) {
+          isReminder = true;
+          reminderBellBtn.classList.add('active');
+        }
+        if (item.cover || (Array.isArray(item.media) && item.media[0]?.link)) {
+          const coverUrl = item.cover || item.media[0].link;
+          bookmarkThumbnail.src = coverUrl;
+          bookmarkThumbnail.classList.remove('hidden');
+          thumbFallback.classList.add('hidden');
+        }
         if (item.collection?.$id !== undefined) {
           const matched = rawCollections.find(c => Number(c.id) === Number(item.collection.$id));
           if (matched) {
@@ -670,7 +804,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         }
       } else {
-        headerStatusTitle.textContent = 'Raindrop';
+        headerStatusTitle.textContent = 'Edit';
         saveBtnText.textContent = 'Save';
         deleteBookmarkBtn.classList.add('hidden');
       }
@@ -682,6 +816,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function setFavorite(active) {
     isFavorite = active;
     heartBtn.classList.toggle('active', isFavorite);
+    markAsEdited();
   }
 
   heartBtn.addEventListener('click', () => {
@@ -691,7 +826,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   reminderBellBtn.addEventListener('click', () => {
     isReminder = !isReminder;
     reminderBellBtn.classList.toggle('active', isReminder);
-    showBanner(isReminder ? 'Reminder active' : 'Reminder disabled', 'info', 2000);
+    markAsEdited();
+    showBanner(isReminder ? 'Reminder scheduled' : 'Reminder disabled', 'info', 2000);
+  });
+
+  thumbnailWrapper.addEventListener('click', () => {
+    if (bookmarkThumbnail.src && !bookmarkThumbnail.classList.contains('hidden')) {
+      showBanner('Preview thumbnail loaded from page cover/favicon.', 'info', 2000);
+    } else {
+      showBanner('Thumbnail will be automatically extracted upon saving.', 'info', 2000);
+    }
   });
 
   highlightsBtn.addEventListener('click', () => {
@@ -716,10 +860,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       await RaindropAPI.deleteRaindrop(currentToken, existingBookmark._id);
       existingBookmark = null;
-      headerStatusTitle.textContent = 'Raindrop';
+      headerStatusTitle.textContent = 'Edit';
+      saveBtnText.textContent = 'Save';
       deleteBookmarkBtn.classList.add('hidden');
       showBanner('Bookmark removed from Raindrop.', 'info', 3000);
-      setTimeout(() => window.close(), 1200);
+      if (typeof window !== 'undefined' && window.close) {
+        setTimeout(() => window.close(), 1200);
+      }
     } catch (err) {
       console.error('Failed to delete bookmark:', err);
       showBanner(`Delete failed: ${err.message}`, 'error');
@@ -755,7 +902,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const note = bookmarkNote.value.trim();
     const rawTags = bookmarkTagsInput.value.trim();
     const tags = rawTags
-      ? Array.from(new Set(rawTags.split(/[,]+/).map(t => t.trim().replace(/^#/, '')).filter(Boolean)))
+      ? Array.from(new Set(rawTags.split(/[,]+/).map(t => t.trim().replace(/^#+/, '')).filter(Boolean)))
       : [];
 
     saveBookmarkBtn.disabled = true;
@@ -764,28 +911,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     try {
       let savedItem;
+      const bookmarkPayload = {
+        url,
+        title,
+        excerpt,
+        note,
+        tags,
+        important: isFavorite,
+        reminder: isReminder ? true : null,
+        collectionId: selectedCollectionId
+      };
+
       if (existingBookmark?._id) {
         // Update existing bookmark
-        savedItem = await RaindropAPI.updateRaindrop(currentToken, existingBookmark._id, {
-          url,
-          title,
-          excerpt,
-          note,
-          tags,
-          important: isFavorite,
-          collectionId: selectedCollectionId
-        });
+        savedItem = await RaindropAPI.updateRaindrop(currentToken, existingBookmark._id, bookmarkPayload);
       } else {
         // Create new bookmark
-        savedItem = await RaindropAPI.createRaindrop(currentToken, {
-          url,
-          title,
-          excerpt,
-          note,
-          tags,
-          important: isFavorite,
-          collectionId: selectedCollectionId
-        });
+        savedItem = await RaindropAPI.createRaindrop(currentToken, bookmarkPayload);
       }
 
       existingBookmark = savedItem;
@@ -815,15 +957,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // AI Sparkle button
   aiSparkleBtn.addEventListener('click', () => {
-    // Generate helpful tags from title words
     const title = bookmarkTitle.value.trim();
     if (!title) return;
-    const words = title.split(/\s+/).filter(w => w.length > 3 && !/^(with|that|this|from|have|your|about)$/i.test(w));
+    const words = title.split(/\s+/).filter(w => w.length > 3 && !/^(with|that|this|from|have|your|about|what|when|where)$/i.test(w));
     if (words.length > 0) {
       const suggested = words.slice(0, 2).map(w => w.toLowerCase().replace(/[^a-z0-9_-]/g, ''));
       const current = bookmarkTagsInput.value.trim();
       const combined = current ? `${current}, ${suggested.join(', ')}` : suggested.join(', ');
       bookmarkTagsInput.value = combined + ', ';
+      markAsEdited();
       showBanner(`Suggested tags added: ${suggested.join(', ')}`, 'info', 2000);
     }
   });
