@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Raindrop Secondary Account Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="page-container">
+    <header class="page-header">
+      <div class="brand">
+        <svg class="brand-icon" viewBox="0 0 128 128" width="32" height="32">
+          <path d="M 62 14 C 62 14 22 54 22 78 C 22 100.1 39.9 118 62 118 C 84.1 118 102 100.1 102 78 C 102 54 62 14 62 14 Z" fill="#007AFF" />
+          <circle cx="94" cy="94" r="22" fill="#FFFFFF" />
+          <circle cx="94" cy="94" r="19" fill="#10B981" />
+          <text x="94" y="101" font-family="sans-serif" font-size="20" font-weight="bold" fill="#FFFFFF" text-anchor="middle">B</text>
+        </svg>
+        <div>
+          <h1>Raindrop.io Secondary Account</h1>
+          <p class="subtitle">Multi-account bookmarking for Brave and Chrome</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="page-content">
+      <!-- Status Banner -->
+      <div id="statusBanner" class="banner hidden"></div>
+
+      <!-- Account Status Card -->
+      <section class="card" id="accountStatusCard">
+        <h2>Connection Status</h2>
+        <div id="statusLoading" class="status-loading">Checking connection...</div>
+        
+        <div id="connectedState" class="connected-state hidden">
+          <div class="account-profile">
+            <div id="userAvatar" class="avatar-placeholder">?</div>
+            <div class="profile-info">
+              <h3 id="userName">User Name</h3>
+              <p id="userEmail" class="text-muted">user@example.com</p>
+              <div class="badge-row">
+                <span id="accountStatusBadge" class="badge-success">● Connected to Account B</span>
+                <span id="userProBadge" class="badge-pro hidden">PRO</span>
+              </div>
+            </div>
+          </div>
+          <div class="account-actions">
+            <button id="testConnectionBtn" class="btn btn-secondary">Test Connection</button>
+            <button id="disconnectBtn" class="btn btn-danger-outline">Disconnect</button>
+          </div>
+        </div>
+
+        <div id="disconnectedState" class="disconnected-state hidden">
+          <p class="text-warning">⚠ Not connected. Please enter a Personal Access Token below.</p>
+        </div>
+      </section>
+
+      <!-- Token Configuration Card -->
+      <section class="card">
+        <h2>Personal Access Token</h2>
+        <p class="section-desc">
+          Using a Personal Access Token allows this extension to save bookmarks directly into your secondary Raindrop.io account without conflicting with the official extension or browser cookies.
+        </p>
+
+        <form id="tokenOptionsForm" autocomplete="off">
+          <div class="form-group">
+            <label for="tokenInput">Access Token</label>
+            <div class="token-input-group">
+              <input type="password" id="tokenInput" required placeholder="Paste your test token here..." />
+              <button type="button" id="toggleVisibilityBtn" class="btn btn-secondary btn-icon" title="Toggle visibility">👁</button>
+            </div>
+            <p class="field-hint">Stored securely in your local browser extension storage.</p>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" id="saveTokenBtn" class="btn btn-primary">
+              <span id="saveSpinner" class="spinner hidden"></span>
+              <span id="saveBtnText">Save & Verify Token</span>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Instructions & Guide Card -->
+      <section class="card">
+        <h2>How to Generate Your Test Token</h2>
+        <div class="setup-steps">
+          <div class="step">
+            <span class="step-num">1</span>
+            <div class="step-content">
+              <strong>Sign into Account B</strong>
+              <p>Log in to your secondary Raindrop.io account (e.g. in a private/incognito window or separate profile).</p>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="step-num">2</span>
+            <div class="step-content">
+              <strong>Open Integrations Settings</strong>
+              <p>
+                Visit <a href="https://app.raindrop.io/settings/integrations" target="_blank" rel="noopener noreferrer" class="link">Raindrop Settings &gt; Integrations</a>.
+              </p>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="step-num">3</span>
+            <div class="step-content">
+              <strong>Create an App under "For Developers"</strong>
+              <p>Scroll down to the <em>For Developers</em> section and click <strong>Create new app</strong>. Enter any name (e.g., <code>Secondary Saver</code>).</p>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="step-num">4</span>
+            <div class="step-content">
+              <strong>Generate Test Token</strong>
+              <p>Click on your new app, click <strong>Create test token</strong>, copy the string, and paste it into the field above.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="page-footer">
+      <p>Raindrop.io Secondary Saver • Manifest V3 Extension</p>
+    </footer>
+  </div>
+
+  <script src="../scripts/api.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

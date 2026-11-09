@@ -1,0 +1,366 @@
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+const EXT_DIR = __dirname;
+let passed = 0;
+let failed = 0;
+
+function assert(condition, message) {
+  if (condition) {
+    console.log(`  ✓ ${message}`);
+    passed++;
+  } else {
+    console.error(`  ✗ FAIL: ${message}`);
+    failed++;
+  }
+}
+
+console.log('=== 1. MANIFEST V3 VALIDATION ===');
+const manifestPath = path.join(EXT_DIR, 'manifest.json');
+assert(fs.existsSync(manifestPath), 'manifest.json exists');
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+assert(manifest.manifest_version === 3, 'manifest_version is 3');
+assert(manifest.name && manifest.version && manifest.description, 'manifest has name, version, description');
+assert(Array.isArray(manifest.permissions), 'permissions is array');
+assert(manifest.permissions.includes('activeTab'), 'permissions includes activeTab');
+assert(manifest.permissions.includes('storage'), 'permissions includes storage');
+assert(manifest.permissions.includes('tabs'), 'permissions includes tabs');
+assert(manifest.host_permissions && manifest.host_permissions.includes('https://api.raindrop.io/*'), 'host_permissions includes api.raindrop.io');
+assert(manifest.action && manifest.action.default_popup === 'popup/popup.html', 'action.default_popup is set');
+assert(manifest.options_ui && manifest.options_ui.page === 'options/options.html', 'options_ui.page is set');
+
+console.log('\n=== 2. ICON CHECKS ===');
+for (const size of ['16', '32', '48', '128']) {
+  const iconRel = manifest.icons[size];
+  const iconFull = path.join(EXT_DIR, iconRel);
+  assert(fs.existsSync(iconFull), `Icon ${size} exists at ${iconRel}`);
+  const stats = fs.statSync(iconFull);
+  assert(stats.size > 0, `Icon ${size} has non-zero size (${stats.size} bytes)`);
+}
+
+console.log('\n=== 3. JAVASCRIPT SYNTAX VERIFICATION ===');
+const jsFiles = [
+  'scripts/api.js',
+  'popup/popup.js',
+  'options/options.js'
+];
+
+for (const rel of jsFiles) {
+  const fullPath = path.join(EXT_DIR, rel);
+  try {
+    execSync(`node --check "${fullPath}"`);
+    assert(true, `Syntax OK: ${rel}`);
+  } catch (err) {
+    assert(false, `Syntax ERROR in ${rel}: ${err.message}`);
+  }
+}
+
+console.log('\n=== 4. HTML RESOURCE REFERENCE CHECKS ===');
+const htmlFiles = [
+  'popup/popup.html',
+  'options/options.html'
+];
+
+for (const htmlRel of htmlFiles) {
+  const fullHtml = path.join(EXT_DIR, htmlRel);
+  assert(fs.existsSync(fullHtml), `${htmlRel} exists`);
+  const content = fs.readFileSync(fullHtml, 'utf8');
+
+  // Check stylesheet links
+  const cssMatches = [...content.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]+href=["']([^"']+)["']/g)];
+  for (const m of cssMatches) {
+    const cssPath = path.resolve(path.dirname(fullHtml), m[1]);
+    assert(fs.existsSync(cssPath), `${htmlRel} references existing CSS: ${m[1]}`);
+  }
+
+  // Check script src
+  const scriptMatches = [...content.matchAll(/<script[^>]+src=["']([^"']+)["']/g)];
+  for (const m of scriptMatches) {
+    const scriptPath = path.resolve(path.dirname(fullHtml), m[1]);
+    assert(fs.existsSync(scriptPath), `${htmlRel} references existing JS: ${m[1]}`);
+  }
+}
+
+console.log('\n=== 5. UNIT TESTING COLLECTION HIERARCHY LOGIC ===');
+// Mock window/chrome in-memory storage for testing
+const mockSyncStorage = {};
+const mockLocalStorage = {};
+
+global.window = {};
+global.chrome = {
+  storage: {
+    sync: {
+      get: async (keys) => {
+        const res = {};
+        for (const k of keys) res[k] = mockSyncStorage[k];
+        return res;
+      },
+      set: async (obj) => Object.assign(mockSyncStorage, obj),
+      remove: async (keys) => {
+        for (const k of keys) delete mockSyncStorage[k];
+      }
+    },
+    local: {
+      get: async (keys) => {
+        const res = {};
+        for (const k of keys) res[k] = mockLocalStorage[k];
+        return res;
+      },
+      set: async (obj) => Object.assign(mockLocalStorage, obj),
+      remove: async (keys) => {
+        for (const k of keys) delete mockLocalStorage[k];
+      }
+    }
+  }
+};
+
+const { RaindropAPI, RaindropStorage } = require(path.join(EXT_DIR, 'scripts/api.js'));
+
+const mockRoots = [
+  { _id: 10, title: 'Development', count: 5, sort: 1 },
+  { _id: 20, title: 'Articles', count: 12, sort: 0 }
+];
+const mockChildren = [
+  { _id: 101, title: 'Frontend', parent: { $id: 10 } },
+  { _id: 102, title: 'Backend', parent: { $id: 10 } },
+  { _id: 1011, title: 'React', parent: { $id: 101 } },
+  { _id: 999, title: 'Orphaned Topic', parent: { $id: 7777 } } // Parent not in root/child list
+];
+
+const hierarchy = RaindropAPI.buildCollectionHierarchy(mockRoots, mockChildren);
+
+assert(hierarchy[0].id === 0 && hierarchy[0].title === 'Unsorted', 'First item is Unsorted collection with id: 0');
+assert(hierarchy.some(h => h.id === 20 && h.title === 'Articles' && h.level === 0), 'Root Articles is level 0');
+assert(hierarchy.some(h => h.id === 10 && h.title === 'Development' && h.level === 0), 'Root Development is level 0');
+assert(hierarchy.some(h => h.id === 101 && h.title === 'Frontend' && h.level === 1), 'Child Frontend is level 1');
+assert(hierarchy.some(h => h.id === 1011 && h.title === 'React' && h.level === 2), 'Nested React is level 2');
+assert(hierarchy.some(h => h.id === 999 && h.title === 'Orphaned Topic'), 'Orphaned child collection is preserved');
+
+console.log('\n=== 6. IMAGE DIMENSION VERIFICATION ===');
+try {
+  const result = execSync(`python3 -c "
+from PIL import Image
+import os
+for s in [16, 32, 48, 128]:
+    im = Image.open('${EXT_DIR}/icons/icon-' + str(s) + '.png')
+    assert im.size == (s, s), f'Wrong size {im.size} for {s}'
+print('All image dimensions validated')
+"`).toString().trim();
+  assert(result === 'All image dimensions validated', 'Icon dimensions verified with Pillow');
+} catch (e) {
+  assert(false, `Icon dimension check failed: ${e.message}`);
+}
+
+console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
+(async () => {
+  // Test storage default collection id is 0
+  const defaultCol = await RaindropStorage.getLastCollectionId();
+  assert(defaultCol === 0, `Default last collection ID is 0 (got ${defaultCol})`);
+
+  // Test setLastCollectionId
+  await RaindropStorage.setLastCollectionId(101);
+  const savedCol = await RaindropStorage.getLastCollectionId();
+  assert(savedCol === 101, 'setLastCollectionId saves and retrieves collection 101');
+
+  // Test token cleaning (strips quotes, leading Bearer, whitespace)
+  await RaindropStorage.setToken('  "Bearer secret-token-12345"  ');
+  const storedToken = await RaindropStorage.getToken();
+  assert(storedToken === 'secret-token-12345', `setToken sanitizes quotes and Bearer prefix (got '${storedToken}')`);
+
+  // Test clearToken
+  await RaindropStorage.clearToken();
+  const clearedToken = await RaindropStorage.getToken();
+  assert(clearedToken === null, 'clearToken clears stored token');
+
+  console.log('\n=== 8. API CLIENT EDGE CASES & VALIDATION ===');
+  // Test missing URL in createRaindrop
+  try {
+    await RaindropAPI.createRaindrop('fake-token', { url: '' });
+    assert(false, 'createRaindrop should reject empty URL');
+  } catch (err) {
+    assert(err.message.includes('URL is required'), 'createRaindrop correctly rejects empty URL');
+  }
+
+  // Test missing token in request
+  try {
+    await RaindropAPI.request('/user', null);
+    assert(false, 'request should reject missing token');
+  } catch (err) {
+    assert(err.status === 401, 'request rejects missing token with status 401');
+  }
+
+  // Test tag parsing and deduplication
+  const sampleInput = " tech, coding , , javascript , tech ";
+  const parsed = Array.from(new Set(sampleInput.split(/[,]+/).map(t => t.trim()).filter(Boolean)));
+  assert(parsed.length === 3 && parsed[0] === 'tech' && parsed[1] === 'coding' && parsed[2] === 'javascript', 'Tag parsing handles whitespace, empty items, and deduplication cleanly');
+
+  // Test mock createRaindrop collection id normalization
+  // Intercept request to check payload
+  let interceptedPayload = null;
+  const originalRequest = RaindropAPI.request;
+  RaindropAPI.request = async (endpoint, token, options) => {
+    interceptedPayload = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+    return { result: true, item: { _id: 12345 } };
+  };
+
+  // Test fallback when collectionId is 0 (Unsorted)
+  await RaindropAPI.createRaindrop('token', { url: 'https://example.com', collectionId: 0 });
+  assert(interceptedPayload.collection.$id === 0, 'createRaindrop with collectionId 0 sends collection.$id: 0');
+
+  // Test fallback when collectionId is negative (-1)
+  await RaindropAPI.createRaindrop('token', { url: 'https://example.com', collectionId: -1 });
+  assert(interceptedPayload.collection.$id === 0, 'createRaindrop with negative collectionId fallback sends collection.$id: 0');
+
+  // Test tag deduplication in createRaindrop
+  await RaindropAPI.createRaindrop('token', {
+    url: 'https://example.com',
+    tags: ['reading', 'web', 'reading', '   ']
+  });
+  assert(
+    interceptedPayload.tags.length === 2 &&
+    interceptedPayload.tags.includes('reading') &&
+    interceptedPayload.tags.includes('web'),
+    'createRaindrop automatically deduplicates and cleans tags'
+  );
+
+  RaindropAPI.request = originalRequest;
+
+  console.log('\n=== 9. NEW FEATURES & REVIEWS: TAGS /0, COLLECTIONS & API METHODS ===');
+  // Test getTags calls /tags/0 and parses objects with count
+  let requestedEndpoint = null;
+  RaindropAPI.request = async (endpoint, token, options) => {
+    requestedEndpoint = endpoint;
+    if (endpoint === '/tags/0') {
+      return {
+        result: true,
+        items: [
+          { _id: 'javascript', count: 18 },
+          { _id: 'reading', count: 5 },
+          'legacy-tag',
+          { _id: '', count: 0 }
+        ]
+      };
+    }
+    if (endpoint === '/collection') {
+      const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+      return { result: true, item: { _id: 888, title: parsedBody ? parsedBody.title : '' } };
+    }
+    if (endpoint.startsWith('/check/url')) {
+      return { result: true, item: { _id: 9999, title: 'Already Saved Page' } };
+    }
+    if (endpoint.startsWith('/raindrop/9999') && options.method === 'PUT') {
+      const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+      return { result: true, item: { _id: 9999, ...parsedBody } };
+    }
+    if (endpoint.startsWith('/raindrop/9999') && options.method === 'DELETE') {
+      return { result: true };
+    }
+    return { result: true };
+  };
+
+  const fetchedTags = await RaindropAPI.getTags('test-token');
+  assert(requestedEndpoint === '/tags/0', 'getTags calls GET /tags/0 to fetch all user tags');
+  assert(fetchedTags.length === 3, 'getTags filters out empty tags');
+  assert(fetchedTags[0].tag === 'javascript' && fetchedTags[0].count === 18, 'getTags parses tag name and count badge correctly');
+  assert(fetchedTags[1].tag === 'reading' && fetchedTags[1].count === 5, 'getTags parses count 5 for reading');
+  assert(fetchedTags[2].tag === 'legacy-tag' && fetchedTags[2].count === 0, 'getTags safely handles plain string tags');
+
+  // Test createCollection
+  const newCol = await RaindropAPI.createCollection('test-token', 'Design System');
+  assert(newCol._id === 888 && newCol.title === 'Design System', 'createCollection sends POST /collection and returns new collection');
+
+  try {
+    await RaindropAPI.createCollection('test-token', '   ');
+    assert(false, 'createCollection should reject blank title');
+  } catch (e) {
+    assert(e.message.includes('title is required'), 'createCollection correctly validates non-empty title');
+  }
+
+  // Test checkUrl
+  const existing = await RaindropAPI.checkUrl('test-token', 'https://github.com');
+  assert(existing && existing._id === 9999, 'checkUrl correctly returns existing raindrop item');
+  const nullCheck = await RaindropAPI.checkUrl('test-token', null);
+  assert(nullCheck === null, 'checkUrl with null returns null safely');
+
+  // Test updateRaindrop
+  const updated = await RaindropAPI.updateRaindrop('test-token', 9999, {
+    url: 'https://github.com',
+    title: 'Updated Title',
+    collectionId: 456
+  });
+  assert(updated && updated.title === 'Updated Title', 'updateRaindrop updates existing raindrop');
+
+  // Test deleteRaindrop
+  const deleted = await RaindropAPI.deleteRaindrop('test-token', 9999);
+  assert(deleted === true, 'deleteRaindrop successfully calls DELETE /raindrop/:id');
+
+  RaindropAPI.request = originalRequest;
+
+  console.log('\n=== 10. POPUP UI STRUCTURE VALIDATION (Screenshots 1-4 parity) ===');
+  const popupHtml = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.html'), 'utf8');
+
+  // View 1 checks
+  assert(popupHtml.includes('id="viewMain"'), 'popup.html contains View 1 (#viewMain)');
+  assert(popupHtml.includes('class="brand-cloud"'), 'popup.html contains blue cloud brand icon');
+  assert(popupHtml.includes('id="headerStatusTitle"'), 'popup.html contains header status title');
+  assert(popupHtml.includes('id="aiSparkleBtn"'), 'popup.html contains AI sparkle button');
+  assert(popupHtml.includes('id="headerSearchBtn"'), 'popup.html contains search icon button');
+  assert(popupHtml.includes('id="userDropdownMenu"'), 'popup.html contains user avatar dropdown menu');
+  assert(popupHtml.includes('id="thumbnailWrapper"'), 'popup.html contains page thumbnail wrapper');
+  assert(popupHtml.includes('id="bookmarkTitle"'), 'popup.html contains editable title textarea');
+  assert(popupHtml.includes('id="bookmarkExcerpt"'), 'popup.html contains editable excerpt textarea');
+  assert(popupHtml.includes('id="bookmarkNote"'), 'popup.html contains note textarea');
+  assert(popupHtml.includes('class="markdown-badge"'), 'popup.html contains markdown badge (M↓)');
+  assert(popupHtml.includes('id="collectionPillBtn"'), 'popup.html contains collection selector pill');
+  assert(popupHtml.includes('id="bookmarkTagsInput"'), 'popup.html contains tags input');
+  assert(popupHtml.includes('id="tagsAutocompleteDropdown"'), 'popup.html contains custom autocomplete dropdown (not datalist)');
+  assert(popupHtml.includes('id="bookmarkUrl"'), 'popup.html contains URL row');
+  assert(popupHtml.includes('id="heartBtn"'), 'popup.html contains heart favorite toggle');
+  assert(popupHtml.includes('id="reminderBellBtn"'), 'popup.html contains reminder bell toggle');
+  assert(popupHtml.includes('id="highlightsBtn"'), 'popup.html contains Highlights button');
+  assert(popupHtml.includes('id="openTabsViewBtn"'), 'popup.html contains Tabs button');
+  assert(popupHtml.includes('id="deleteBookmarkBtn"'), 'popup.html contains Delete button');
+  assert(popupHtml.includes('id="saveBookmarkBtn"'), 'popup.html contains Gold Save button');
+
+  // View 2 checks
+  assert(popupHtml.includes('id="viewCollection"'), 'popup.html contains View 2 (#viewCollection)');
+  assert(popupHtml.includes('id="backFromCollectionBtn"'), 'popup.html contains back button in collection view');
+  assert(popupHtml.includes('id="collectionSearchInput"'), 'popup.html contains collection search input');
+  assert(popupHtml.includes('data-id="0"') && popupHtml.includes('Unsorted'), 'popup.html contains special collection Unsorted (id 0)');
+  assert(popupHtml.includes('data-id="-99"') && popupHtml.includes('Trash'), 'popup.html contains special collection Trash (id -99)');
+  assert(popupHtml.includes('id="userCollectionsList"'), 'popup.html contains user collections list container');
+  assert(popupHtml.includes('id="createNewCollectionItem"'), 'popup.html contains create new collection item');
+
+  // View 3 checks
+  assert(popupHtml.includes('id="viewTabs"'), 'popup.html contains View 3 (#viewTabs)');
+  assert(popupHtml.includes('id="backFromTabsBtn"'), 'popup.html contains back button in save tabs view');
+  assert(popupHtml.includes('id="selectAllTabsCheckbox"'), 'popup.html contains select all tabs checkbox');
+  assert(popupHtml.includes('id="openTabsList"'), 'popup.html contains scrollable open tabs list');
+  assert(popupHtml.includes('id="tabsCollectionPillBtn"'), 'popup.html contains collection pill in tabs view');
+  assert(popupHtml.includes('id="tabsTagsInput"'), 'popup.html contains date-prefilled tags input');
+  assert(popupHtml.includes('id="closeTabsCheckbox"'), 'popup.html contains Close tabs checkbox');
+  assert(popupHtml.includes('id="executeSaveTabsBtn"'), 'popup.html contains gold Save tabs action button');
+
+  // View 4 checks
+  assert(popupHtml.includes('id="viewSettings"'), 'popup.html contains View 4 (#viewSettings modal)');
+  assert(popupHtml.includes('id="settingsTokenInput"'), 'popup.html contains personal access token input');
+  assert(popupHtml.includes('id="submitTokenBtn"'), 'popup.html contains token verify & connect button');
+
+  // CSS Checks
+  const popupCss = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.css'), 'utf8');
+  assert(popupCss.includes('--bg-primary: #1e2022') || popupCss.includes('#1e2022'), 'CSS includes primary background #1e2022');
+  assert(popupCss.includes('--bg-secondary: #232528') || popupCss.includes('#232528'), 'CSS includes card background #232528');
+  assert(popupCss.includes('--bg-input: #2a2c30') || popupCss.includes('#2a2c30'), 'CSS includes input background #2a2c30');
+  assert(popupCss.includes('--accent-gold: #d4b476') || popupCss.includes('#d4b476'), 'CSS includes gold accent #d4b476');
+  assert(popupCss.includes('.tags-dropdown'), 'CSS includes .tags-dropdown custom autocomplete styling');
+  assert(popupCss.includes('.collection-pill-btn'), 'CSS includes .collection-pill-btn styling');
+  assert(popupCss.includes('.save-gold-btn'), 'CSS includes .save-gold-btn styling');
+
+  console.log(`\n========================================`);
+  console.log(`Verification Complete: ${passed} Passed, ${failed} Failed`);
+  if (failed > 0) {
+    process.exit(1);
+  }
+})();

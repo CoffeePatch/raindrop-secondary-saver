@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="dropGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00A3FF" />
+      <stop offset="100%" stop-color="#0066FF" />
+    </linearGradient>
+    <linearGradient id="badgeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10B981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Droplet Body -->
+  <path d="M 62 14 C 62 14 22 54 22 78 C 22 100.1 39.9 118 62 118 C 84.1 118 102 100.1 102 78 C 102 54 62 14 62 14 Z"
+        fill="url(#dropGrad)" />
+
+  <!-- Inner Gloss Highlight -->
+  <path d="M 36 78 C 36 64 48 46 62 30 C 50 46 42 62 42 78 C 42 84 44 90 48 95 C 40 89 36 84 36 78 Z"
+        fill="#FFFFFF" opacity="0.35" />
+
+  <!-- Account "B" Secondary Badge -->
+  <g filter="url(#shadow)">
+    <!-- White border circle -->
+    <circle cx="94" cy="94" r="24" fill="#FFFFFF" />
+    <!-- Inner badge circle -->
+    <circle cx="94" cy="94" r="21" fill="url(#badgeGrad)" />
+    <!-- Letter B -->
+    <text x="94" y="102" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+          font-size="22" font-weight="800" fill="#FFFFFF" text-anchor="middle">B</text>
+  </g>
+</svg>

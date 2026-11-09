@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Save to Raindrop</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body class="theme-dark">
+  <div id="app" class="app-container">
+
+    <!-- Notification Banner -->
+    <div id="noticeBanner" class="notice-banner hidden"></div>
+
+    <!-- ============================================== -->
+    <!-- VIEW 1: MAIN BOOKMARK VIEW (Screenshots 1 & 3) -->
+    <!-- ============================================== -->
+    <div id="viewMain" class="subview active">
+      <!-- Header -->
+      <header class="app-header">
+        <div class="header-left">
+          <div class="brand-cloud" title="Raindrop.io Secondary Saver">
+            <svg class="cloud-icon" viewBox="0 0 24 24" width="22" height="22">
+              <path fill="#007aff" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+              <path fill="#ffffff" d="M10 15.5l-3.5-3.5 1.41-1.41L10 12.67l5.59-5.59L17 8.5z"/>
+            </svg>
+          </div>
+          <span id="headerStatusTitle" class="header-status-title">Saved</span>
+        </div>
+
+        <div class="header-right">
+          <!-- Sparkle / AI Button -->
+          <button type="button" id="aiSparkleBtn" class="hdr-icon-btn" title="Auto-detect & summarize">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor">
+              <path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/>
+            </svg>
+          </button>
+
+          <!-- Search Button -->
+          <button type="button" id="headerSearchBtn" class="hdr-icon-btn" title="Open Raindrop Search">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+            </svg>
+          </button>
+
+          <!-- User Avatar Dropdown Button -->
+          <div class="avatar-dropdown-wrapper">
+            <button type="button" id="userMenuBtn" class="hdr-avatar-btn" title="Account Menu">
+              <div id="userAvatarCircle" class="avatar-circle">B</div>
+            </button>
+
+            <!-- Dropdown Menu -->
+            <div id="userDropdownMenu" class="user-menu-popover hidden">
+              <div class="menu-user-header">
+                <div id="menuUserName" class="menu-user-name">Account B</div>
+                <div id="menuUserEmail" class="menu-user-email">Connected via Token</div>
+              </div>
+              <div class="menu-divider"></div>
+              <button type="button" id="menuOpenWebBtn" class="menu-item">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                  <path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/>
+                </svg>
+                <span>Open Raindrop Web</span>
+              </button>
+              <button type="button" id="menuSwitchTokenBtn" class="menu-item">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                  <path d="M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/>
+                </svg>
+                <span>Switch Token / Settings</span>
+              </button>
+              <button type="button" id="menuDisconnectBtn" class="menu-item danger-item">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                  <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
+                </svg>
+                <span>Disconnect</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Bookmark Form Body -->
+      <form id="mainBookmarkForm" class="bookmark-form" autocomplete="off">
+        <!-- Bookmark Preview Section (Top Card) -->
+        <section class="preview-card">
+          <div class="thumbnail-wrapper" id="thumbnailWrapper" title="Change preview thumbnail">
+            <img id="bookmarkThumbnail" class="bookmark-thumb hidden" alt="Thumbnail" />
+            <div id="thumbFallback" class="thumb-fallback">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="#6b7280">
+                <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+              </svg>
+            </div>
+            <div class="thumb-arrow-badge">▾</div>
+          </div>
+
+          <div class="preview-text-col">
+            <textarea id="bookmarkTitle" class="input-title" rows="2" placeholder="Page title..." required></textarea>
+            <textarea id="bookmarkExcerpt" class="input-excerpt" rows="2" placeholder="Description or excerpt..."></textarea>
+          </div>
+        </section>
+
+        <!-- Note Field with M↓ badge -->
+        <section class="field-section note-section">
+          <div class="note-textarea-container">
+            <textarea id="bookmarkNote" class="input-note" rows="2" placeholder="Note..."></textarea>
+            <div class="markdown-badge" title="Markdown supported">M↓</div>
+          </div>
+        </section>
+
+        <!-- Meta Rows (Collection, Tags, URL) -->
+        <section class="meta-rows-container">
+          <!-- Collection Row -->
+          <div class="meta-row">
+            <span class="meta-label">Collection</span>
+            <div class="meta-control">
+              <button type="button" id="collectionPillBtn" class="collection-pill-btn" title="Change collection">
+                <span id="pillIcon" class="pill-icon">🔥</span>
+                <span id="pillTitle" class="pill-title">Unsorted</span>
+                <span class="pill-arrow">▾</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Tags Row -->
+          <div class="meta-row tags-row">
+            <span class="meta-label">Tags</span>
+            <div class="meta-control tags-input-wrapper">
+              <div id="tagsInputContainer" class="tags-input-container">
+                <input type="text" id="bookmarkTagsInput" class="input-tags" placeholder="Add tags..." autocomplete="off" />
+              </div>
+
+              <!-- Custom Autocomplete Dropdown -->
+              <div id="tagsAutocompleteDropdown" class="tags-dropdown hidden">
+                <div id="tagsDropdownList" class="tags-dropdown-list">
+                  <!-- Tag items dynamically injected -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- URL Row -->
+          <div class="meta-row">
+            <span class="meta-label">URL</span>
+            <div class="meta-control">
+              <input type="text" id="bookmarkUrl" class="input-url" placeholder="https://..." required />
+            </div>
+          </div>
+        </section>
+
+        <!-- Heart and Bell Actions Row -->
+        <section class="quick-icons-row">
+          <button type="button" id="heartBtn" class="quick-action-btn" title="Favorite" aria-label="Favorite">
+            <svg id="heartSvg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+            </svg>
+          </button>
+
+          <button type="button" id="reminderBellBtn" class="quick-action-btn" title="Reminder" aria-label="Reminder">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+          </button>
+        </section>
+
+        <!-- Bottom Action Bar -->
+        <footer class="app-bottom-bar">
+          <div class="bottom-left-group">
+            <button type="button" id="highlightsBtn" class="bottom-tab-btn" title="View Highlights">
+              <span class="btn-icon-symbol">✏</span>
+              <span>Highlights</span>
+            </button>
+            <button type="button" id="openTabsViewBtn" class="bottom-tab-btn" title="Save All Open Tabs">
+              <span class="btn-icon-symbol">⊞</span>
+              <span>Tabs</span>
+            </button>
+          </div>
+
+          <div class="bottom-right-group">
+            <button type="button" id="deleteBookmarkBtn" class="delete-btn hidden" title="Remove bookmark">
+              Delete
+            </button>
+            <button type="submit" id="saveBookmarkBtn" class="save-gold-btn">
+              <span id="saveBtnSpinner" class="spinner hidden"></span>
+              <span id="saveBtnText">Save</span>
+            </button>
+          </div>
+        </footer>
+      </form>
+    </div>
+
+    <!-- ============================================== -->
+    <!-- VIEW 2: SELECT COLLECTION SUBVIEW (Screenshot 2) -->
+    <!-- ============================================== -->
+    <div id="viewCollection" class="subview hidden">
+      <!-- Collection View Header -->
+      <header class="subview-header">
+        <button type="button" id="backFromCollectionBtn" class="back-btn" title="Back to bookmark">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+          </svg>
+        </button>
+        <h2 class="subview-title">Select collection</h2>
+      </header>
+
+      <!-- Search Collection Box -->
+      <div class="collection-search-container">
+        <div class="search-input-wrapper">
+          <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+          </svg>
+          <input type="text" id="collectionSearchInput" class="input-collection-search" placeholder="Find or create new collection..." autocomplete="off" />
+        </div>
+      </div>
+
+      <!-- Scrollable Collections List -->
+      <div class="collection-list-container">
+        <!-- Special Collections Top Section -->
+        <div class="special-collections-group">
+          <!-- Unsorted (0) -->
+          <div class="collection-item special-item" data-id="0" data-title="Unsorted" data-icon="〰">
+            <div class="coll-left">
+              <span class="coll-icon">〰</span>
+              <span class="coll-title">Unsorted</span>
+            </div>
+            <span id="unsortedCountBadge" class="coll-count">0</span>
+          </div>
+
+          <!-- Trash (-99) -->
+          <div class="collection-item special-item" data-id="-99" data-title="Trash" data-icon="🗑">
+            <div class="coll-left">
+              <span class="coll-icon">🗑</span>
+              <span class="coll-title">Trash</span>
+            </div>
+            <span id="trashCountBadge" class="coll-count">0</span>
+          </div>
+        </div>
+
+        <!-- Section Divider -->
+        <div class="section-label-row">
+          <span>COLLECTIONS</span>
+        </div>
+
+        <!-- Create New Collection Row (Visible when searching) -->
+        <div id="createNewCollectionItem" class="collection-item create-item hidden">
+          <div class="coll-left">
+            <span class="coll-icon">+</span>
+            <span class="coll-title" id="createCollectionText">Create collection</span>
+          </div>
+        </div>
+
+        <!-- User Collections List -->
+        <div id="userCollectionsList" class="user-collections-group">
+          <!-- Injected dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================== -->
+    <!-- VIEW 3: SAVE TABS SUBVIEW (Screenshot 4)        -->
+    <!-- ============================================== -->
+    <div id="viewTabs" class="subview hidden">
+      <!-- Tabs View Header -->
+      <header class="subview-header">
+        <button type="button" id="backFromTabsBtn" class="back-btn" title="Back to bookmark">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+          </svg>
+        </button>
+        <h2 class="subview-title">Save tabs</h2>
+      </header>
+
+      <!-- Scrollable Tabs List -->
+      <div class="tabs-list-wrapper">
+        <div class="tabs-header-sub">
+          <label class="select-all-label">
+            <input type="checkbox" id="selectAllTabsCheckbox" checked />
+            <span>Select all open tabs</span>
+          </label>
+          <span id="selectedTabsCounter" class="tabs-count-badge">0 tabs</span>
+        </div>
+
+        <div id="openTabsList" class="open-tabs-list">
+          <!-- Dynamically populated open tabs -->
+        </div>
+      </div>
+
+      <!-- Tabs Save Options Form -->
+      <div class="tabs-save-controls">
+        <!-- Collection selector pill -->
+        <div class="meta-row">
+          <span class="meta-label">Collection</span>
+          <div class="meta-control">
+            <button type="button" id="tabsCollectionPillBtn" class="collection-pill-btn" title="Change target collection">
+              <span id="tabsPillIcon" class="pill-icon">🔥</span>
+              <span id="tabsPillTitle" class="pill-title">Unsorted</span>
+              <span class="pill-arrow">▾</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Tags Row with Date prefilled -->
+        <div class="meta-row">
+          <span class="meta-label">Tags</span>
+          <div class="meta-control">
+            <input type="text" id="tabsTagsInput" class="input-tags" placeholder="#MM/DD/YYYY" />
+          </div>
+        </div>
+
+        <!-- Close Tabs Checkbox -->
+        <div class="close-tabs-row">
+          <label class="custom-checkbox-label">
+            <input type="checkbox" id="closeTabsCheckbox" />
+            <span class="checkbox-text">Close tabs</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Action Bar -->
+      <footer class="app-bottom-bar tabs-bottom-bar">
+        <div></div>
+        <button type="button" id="executeSaveTabsBtn" class="save-gold-btn">
+          <span id="saveTabsSpinner" class="spinner hidden"></span>
+          <span id="saveTabsBtnText">Save tabs</span>
+        </button>
+      </footer>
+    </div>
+
+    <!-- ============================================== -->
+    <!-- VIEW 4: TOKEN SETUP / SETTINGS MODAL           -->
+    <!-- ============================================== -->
+    <div id="viewSettings" class="subview hidden">
+      <header class="subview-header">
+        <button type="button" id="closeSettingsBtn" class="back-btn" title="Back">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+          </svg>
+        </button>
+        <h2 class="subview-title">Raindrop Account B Setup</h2>
+      </header>
+
+      <div class="settings-body">
+        <div class="settings-intro-card">
+          <div class="brand-badge-row">
+            <svg viewBox="0 0 128 128" width="28" height="28">
+              <path d="M 62 14 C 62 14 22 54 22 78 C 22 100.1 39.9 118 62 118 C 84.1 118 102 100.1 102 78 C 102 54 62 14 62 14 Z" fill="#007AFF" />
+              <circle cx="94" cy="94" r="22" fill="#FFFFFF" />
+              <circle cx="94" cy="94" r="19" fill="#10B981" />
+              <text x="94" y="101" font-family="sans-serif" font-size="20" font-weight="bold" fill="#FFFFFF" text-anchor="middle">B</text>
+            </svg>
+            <div>
+              <h3>Connect Secondary Account</h3>
+              <p>Bookmark directly to Account B without logging out of Account A.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="instructions-steps-box">
+          <ol>
+            <li>Log into your secondary account at <strong>Raindrop.io</strong>.</li>
+            <li>Visit <a id="linkIntegrations" href="https://app.raindrop.io/settings/integrations" class="gold-link">Settings &gt; Integrations</a>.</li>
+            <li>Under <strong>"For Developers"</strong>, click <em>Create new app</em>.</li>
+            <li>Click <strong>"Create test token"</strong> and paste it below.</li>
+          </ol>
+        </div>
+
+        <form id="tokenConfigForm">
+          <div class="form-field">
+            <label for="settingsTokenInput">Personal Access Token</label>
+            <div class="token-input-row">
+              <input type="password" id="settingsTokenInput" placeholder="Paste test token here..." required autocomplete="off" />
+              <button type="button" id="toggleTokenViewBtn" class="toggle-eye-btn" title="Show/Hide">👁</button>
+            </div>
+          </div>
+
+          <div class="settings-actions-row">
+            <button type="submit" id="submitTokenBtn" class="save-gold-btn full-width">
+              <span id="settingsSpinner" class="spinner hidden"></span>
+              <span id="settingsBtnText">Verify & Connect</span>
+            </button>
+          </div>
+        </form>
+
+        <div class="settings-links-row">
+          <a id="linkAdvancedOptions" href="#" class="muted-link">Open Full Options Page ↗</a>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="../scripts/api.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
