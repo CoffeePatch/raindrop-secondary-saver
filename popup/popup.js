@@ -2,7 +2,396 @@
  * Raindrop Secondary Saver - 1:1 Pixel-Perfect Popup Controller
  */
 
-document.addEventListener('DOMContentLoaded', async () => {
+function escapeHtml(str) {
+  return (str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+class TagChipsComponent {
+  constructor({
+    container,
+    input,
+    dropdown,
+    dropdownList,
+    placeholder = 'Add tags...',
+    onChange = () => {},
+    getAllTags = () => [],
+    getRecentTags = () => [],
+    doc = (typeof document !== 'undefined' ? document : null)
+  }) {
+    this.container = container;
+    this.input = input;
+    this.dropdown = dropdown;
+    this.dropdownList = dropdownList;
+    this.placeholder = placeholder;
+    this.onChange = onChange;
+    this.getAllTags = getAllTags;
+    this.getRecentTags = getRecentTags;
+    this.doc = doc;
+
+    this.tags = [];
+    this.activeAutocompleteIndex = -1;
+
+    this.init();
+  }
+
+  init() {
+    if (!this.container || !this.input) return;
+
+    // Focus input when clicking anywhere in the container
+    this.container.addEventListener('click', (e) => {
+      if (!e.target.closest || !e.target.closest('.tag-chip')) {
+        this.input.focus();
+      }
+    });
+
+    // Handle typing and pasting in the inline input
+    this.input.addEventListener('input', () => {
+      const val = this.input.value || '';
+      if (val.includes(',')) {
+        const parts = val.split(',');
+        for (let i = 0; i < parts.length - 1; i++) {
+          const t = parts[i].trim();
+          if (t) this.addTag(t);
+        }
+        this.input.value = parts[parts.length - 1].trimStart();
+      }
+      this.renderDropdown();
+    });
+
+    this.input.addEventListener('focus', () => {
+      this.renderDropdown();
+    });
+
+    this.input.addEventListener('keydown', (e) => {
+      this.handleKeydown(e);
+    });
+
+    if (this.doc) {
+      this.doc.addEventListener('click', (e) => {
+        if (
+          this.container &&
+          !this.container.contains(e.target) &&
+          this.dropdown &&
+          !this.dropdown.contains(e.target)
+        ) {
+          this.hideDropdown();
+        }
+      });
+    }
+
+    this.renderChips();
+  }
+
+  handleKeydown(e) {
+    const items = this.dropdownList
+      ? this.dropdownList.querySelectorAll('.tag-dropdown-item')
+      : [];
+    const isDropdownOpen =
+      this.dropdown &&
+      !this.dropdown.classList.contains('hidden') &&
+      items.length > 0;
+
+    if (e.key === 'ArrowDown') {
+      if (isDropdownOpen) {
+        e.preventDefault();
+        this.activeAutocompleteIndex = (this.activeAutocompleteIndex + 1) % items.length;
+        this.updateActiveItem(items);
+      }
+    } else if (e.key === 'ArrowUp') {
+      if (isDropdownOpen) {
+        e.preventDefault();
+        this.activeAutocompleteIndex =
+          (this.activeAutocompleteIndex - 1 + items.length) % items.length;
+        this.updateActiveItem(items);
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (isDropdownOpen && this.activeAutocompleteIndex >= 0 && items[this.activeAutocompleteIndex]) {
+        items[this.activeAutocompleteIndex].click();
+      } else if (isDropdownOpen && items.length > 0) {
+        items[0].click();
+      } else {
+        const text = (this.input.value || '').trim();
+        if (text) {
+          this.addTag(text);
+        }
+      }
+    } else if (e.key === ',') {
+      e.preventDefault();
+      const text = (this.input.value || '').trim();
+      if (text) {
+        this.addTag(text);
+      }
+    } else if (e.key === 'Backspace') {
+      if (
+        this.input.value === '' &&
+        (this.input.selectionStart === 0 || this.input.selectionStart === undefined) &&
+        (this.input.selectionEnd === 0 || this.input.selectionEnd === undefined)
+      ) {
+        this.removeLastTag();
+      }
+    } else if (e.key === 'Tab') {
+      if (isDropdownOpen && items.length > 0) {
+        e.preventDefault();
+        const target =
+          this.activeAutocompleteIndex >= 0 && items[this.activeAutocompleteIndex]
+            ? items[this.activeAutocompleteIndex]
+            : items[0];
+        target.click();
+      }
+    } else if (e.key === 'Escape') {
+      this.hideDropdown();
+    }
+  }
+
+  updateActiveItem(items) {
+    items.forEach((it, idx) => {
+      it.classList.toggle('active-item', idx === this.activeAutocompleteIndex);
+      if (idx === this.activeAutocompleteIndex && it.scrollIntoView) {
+        it.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+
+  renderChips() {
+    if (!this.container || !this.doc) return;
+
+    const existingChips = this.container.querySelectorAll('.tag-chip');
+    existingChips.forEach((el) => {
+      if (el.remove) el.remove();
+      else if (this.container.removeChild) this.container.removeChild(el);
+    });
+
+    this.tags.forEach((tag) => {
+      const chip = this.doc.createElement('div');
+      chip.className = 'tag-chip';
+      if (chip.classList && chip.classList.add) chip.classList.add('tag-chip');
+      chip.dataset.tag = tag;
+
+      const removeBtn = this.doc.createElement('span');
+      removeBtn.className = 'tag-chip-remove';
+      if (removeBtn.classList && removeBtn.classList.add) removeBtn.classList.add('tag-chip-remove');
+      removeBtn.title = 'Remove tag';
+      removeBtn.textContent = '✕';
+
+      const textSpan = this.doc.createElement('span');
+      textSpan.className = 'tag-chip-text';
+      if (textSpan.classList && textSpan.classList.add) textSpan.classList.add('tag-chip-text');
+      textSpan.textContent = tag;
+
+      chip.appendChild(removeBtn);
+      chip.appendChild(textSpan);
+
+      chip.addEventListener('click', (e) => {
+        if (e.stopPropagation) e.stopPropagation();
+        this.removeTag(tag);
+        if (this.input && this.input.focus) this.input.focus();
+      });
+
+      this.container.insertBefore(chip, this.input);
+    });
+
+    if (this.input) {
+      if (this.tags.length === 0) {
+        this.input.placeholder = this.placeholder;
+      } else {
+        this.input.placeholder = '';
+      }
+    }
+  }
+
+  addTag(tag) {
+    if (!tag) return;
+    const cleanTag = String(tag).trim();
+    if (!cleanTag) return;
+
+    const exists = this.tags.some(
+      (t) => t.toLowerCase() === cleanTag.toLowerCase()
+    );
+    if (!exists) {
+      this.tags.push(cleanTag);
+      this.renderChips();
+      this.onChange(this.tags);
+    }
+
+    if (this.input) {
+      this.input.value = '';
+    }
+    this.hideDropdown();
+  }
+
+  removeTag(tag) {
+    const clean = String(tag).trim().toLowerCase();
+    const prevLen = this.tags.length;
+    this.tags = this.tags.filter((t) => t.toLowerCase() !== clean);
+    if (this.tags.length !== prevLen) {
+      this.renderChips();
+      this.onChange(this.tags);
+    }
+    this.hideDropdown();
+  }
+
+  removeLastTag() {
+    if (this.tags.length > 0) {
+      this.tags.pop();
+      this.renderChips();
+      this.onChange(this.tags);
+      this.renderDropdown();
+    }
+  }
+
+  setTags(newTags) {
+    const list = Array.isArray(newTags) ? newTags : [newTags];
+    const seen = new Set();
+    const clean = [];
+    for (const t of list) {
+      const s = String(t).trim();
+      const lower = s.toLowerCase();
+      if (s && !seen.has(lower)) {
+        seen.add(lower);
+        clean.push(s);
+      }
+    }
+    this.tags = clean;
+    this.renderChips();
+    if (this.input) {
+      this.input.value = '';
+    }
+    this.hideDropdown();
+  }
+
+  getTags() {
+    return [...this.tags];
+  }
+
+  commitCurrentInput() {
+    if (this.input && this.input.value && this.input.value.trim()) {
+      this.addTag(this.input.value.trim());
+    }
+  }
+
+  clear() {
+    this.tags = [];
+    this.renderChips();
+    if (this.input) {
+      this.input.value = '';
+    }
+    this.hideDropdown();
+  }
+
+  renderDropdown() {
+    if (!this.dropdown || !this.dropdownList || !this.doc) return;
+
+    const query = this.input ? (this.input.value || '').trim() : '';
+    const allTags = this.getAllTags();
+    const recentTags = this.getRecentTags();
+
+    const grouped = (typeof RaindropAPI !== 'undefined' && RaindropAPI.groupTagsForDropdown)
+      ? RaindropAPI.groupTagsForDropdown(query, this.tags, recentTags, allTags)
+      : { addTagOption: query || null, recentMatches: [], otherMatches: [] };
+
+    this.dropdownList.innerHTML = '';
+    this.activeAutocompleteIndex = -1;
+
+    let hasAnyItems = false;
+
+    // 1. Add Tag option (if query typed and not already selected)
+    if (grouped.addTagOption) {
+      hasAnyItems = true;
+      const addEl = this.doc.createElement('div');
+      addEl.className = 'tag-dropdown-item tag-dropdown-add';
+      addEl.innerHTML = `<span class="tag-item-name">+ Add tag "<strong>#${escapeHtml(grouped.addTagOption)}</strong>"</span>`;
+      addEl.addEventListener('mousedown', (e) => {
+        if (e.preventDefault) e.preventDefault();
+        this.addTag(grouped.addTagOption);
+      });
+      addEl.addEventListener('click', () => {
+        this.addTag(grouped.addTagOption);
+      });
+      this.dropdownList.appendChild(addEl);
+    }
+
+    // 2. Recent Section
+    if (grouped.recentMatches && grouped.recentMatches.length > 0) {
+      hasAnyItems = true;
+      const recentHeader = this.doc.createElement('div');
+      recentHeader.className = 'tag-dropdown-header';
+      recentHeader.textContent = 'Recent';
+      this.dropdownList.appendChild(recentHeader);
+
+      grouped.recentMatches.forEach((item) => {
+        const row = this.doc.createElement('div');
+        row.className = 'tag-dropdown-item';
+        row.dataset.tag = item.tag;
+        row.innerHTML = `
+          <span class="tag-item-name"># ${escapeHtml(item.tag)}</span>
+          ${item.count > 0 ? `<span class="tag-item-count">${item.count}</span>` : ''}
+        `;
+        row.addEventListener('mousedown', (e) => {
+          if (e.preventDefault) e.preventDefault();
+          this.addTag(item.tag);
+        });
+        row.addEventListener('click', () => {
+          this.addTag(item.tag);
+        });
+        this.dropdownList.appendChild(row);
+      });
+    }
+
+    // 3. Other Section
+    if (grouped.otherMatches && grouped.otherMatches.length > 0) {
+      hasAnyItems = true;
+      const otherHeader = this.doc.createElement('div');
+      otherHeader.className = 'tag-dropdown-header';
+      otherHeader.textContent = 'Other';
+      this.dropdownList.appendChild(otherHeader);
+
+      grouped.otherMatches.forEach((item) => {
+        const row = this.doc.createElement('div');
+        row.className = 'tag-dropdown-item';
+        row.dataset.tag = item.tag;
+        row.innerHTML = `
+          <span class="tag-item-name"># ${escapeHtml(item.tag)}</span>
+          ${item.count > 0 ? `<span class="tag-item-count">${item.count}</span>` : ''}
+        `;
+        row.addEventListener('mousedown', (e) => {
+          if (e.preventDefault) e.preventDefault();
+          this.addTag(item.tag);
+        });
+        row.addEventListener('click', () => {
+          this.addTag(item.tag);
+        });
+        this.dropdownList.appendChild(row);
+      });
+    }
+
+    if (!hasAnyItems) {
+      this.hideDropdown();
+    } else {
+      this.showDropdown();
+    }
+  }
+
+  showDropdown() {
+    if (this.dropdown) {
+      this.dropdown.classList.remove('hidden');
+    }
+  }
+
+  hideDropdown() {
+    if (this.dropdown) {
+      this.dropdown.classList.add('hidden');
+    }
+    this.activeAutocompleteIndex = -1;
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', async () => {
   // ==========================================
   // DOM Elements
   // ==========================================
@@ -40,6 +429,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const collectionPillBtn = document.getElementById('collectionPillBtn');
   const pillIcon = document.getElementById('pillIcon');
   const pillTitle = document.getElementById('pillTitle');
+  const tagsInputContainer = document.getElementById('tagsInputContainer');
   const bookmarkTagsInput = document.getElementById('bookmarkTagsInput');
   const tagsAutocompleteDropdown = document.getElementById('tagsAutocompleteDropdown');
   const tagsDropdownList = document.getElementById('tagsDropdownList');
@@ -71,7 +461,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const tabsCollectionPillBtn = document.getElementById('tabsCollectionPillBtn');
   const tabsPillIcon = document.getElementById('tabsPillIcon');
   const tabsPillTitle = document.getElementById('tabsPillTitle');
+  const tabsTagsInputContainer = document.getElementById('tabsTagsInputContainer');
   const tabsTagsInput = document.getElementById('tabsTagsInput');
+  const tabsTagsAutocompleteDropdown = document.getElementById('tabsTagsAutocompleteDropdown');
+  const tabsTagsDropdownList = document.getElementById('tabsTagsDropdownList');
   const closeTabsCheckbox = document.getElementById('closeTabsCheckbox');
   const executeSaveTabsBtn = document.getElementById('executeSaveTabsBtn');
   const saveTabsSpinner = document.getElementById('saveTabsSpinner');
@@ -226,7 +619,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ==========================================
-  // Autocomplete Tags Engine (GET /tags/0)
+  // Autocomplete Tags Engine & Tag Chips
   // ==========================================
   async function loadTags() {
     if (!currentToken) return;
@@ -238,176 +631,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  function getCurrentTagQuery() {
-    const text = bookmarkTagsInput.value;
-    const parts = text.split(',');
-    const current = parts[parts.length - 1].trim();
-    return current.replace(/^#+/, '');
-  }
-
-  function insertTag(tagToAdd) {
-    const cleanTag = tagToAdd.trim().replace(/^#+/, '');
-    if (!cleanTag) return;
-
-    const raw = bookmarkTagsInput.value;
-    const parts = raw.split(',');
-    // If last slot was an in-progress tag, replace it; otherwise append
-    if (parts.length > 0 && parts[parts.length - 1].trim().length > 0) {
-      parts[parts.length - 1] = cleanTag;
-    } else {
-      parts.push(cleanTag);
+  async function loadRecentTags() {
+    try {
+      recentTags = await RaindropStorage.getRecentTags();
+    } catch (e) {
+      console.warn('Failed to load recent tags:', e);
+      recentTags = [];
     }
-
-    const cleanList = parts.map(p => p.trim().replace(/^#+/, '')).filter(Boolean);
-    bookmarkTagsInput.value = cleanList.join(', ') + ', ';
-    bookmarkTagsInput.focus();
-    hideTagsDropdown();
-    markAsEdited();
   }
 
-  function renderTagsAutocomplete() {
-    const query = getCurrentTagQuery().toLowerCase();
-    const existingTags = new Set(
-      bookmarkTagsInput.value
-        .split(',')
-        .slice(0, -1)
-        .map(t => t.trim().replace(/^#+/, '').toLowerCase())
-        .filter(Boolean)
-    );
-
-    tagsDropdownList.innerHTML = '';
-    activeAutocompleteIndex = -1;
-
-    // Filter matching tags from allTags
-    const matches = allTags.filter(item => {
-      const lower = item.tag.toLowerCase();
-      if (existingTags.has(lower)) return false;
-      return !query || lower.includes(query);
-    }).slice(0, 20);
-
-    if (matches.length === 0 && !query) {
-      hideTagsDropdown();
-      return;
-    }
-
-    if (matches.length === 0 && query) {
-      // Option to add new tag
-      const createItem = document.createElement('div');
-      createItem.className = 'tag-dropdown-item';
-      createItem.innerHTML = `<span class="tag-item-name">+ Add tag "<strong>#${escapeHtml(query)}</strong>"</span>`;
-      createItem.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        insertTag(query);
-      });
-      createItem.addEventListener('click', () => insertTag(query));
-      tagsDropdownList.appendChild(createItem);
-      showTagsDropdown();
-      return;
-    }
-
-    matches.forEach((item, index) => {
-      const row = document.createElement('div');
-      row.className = 'tag-dropdown-item';
-      row.dataset.index = index;
-      row.innerHTML = `
-        <span class="tag-item-name"># ${escapeHtml(item.tag)}</span>
-        <span class="tag-item-count">${item.count}</span>
-      `;
-      row.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        insertTag(item.tag);
-      });
-      row.addEventListener('click', () => insertTag(item.tag));
-      tagsDropdownList.appendChild(row);
-    });
-
-    showTagsDropdown();
-  }
-
-  function showTagsDropdown() {
-    tagsAutocompleteDropdown.classList.remove('hidden');
-  }
-
-  function hideTagsDropdown() {
-    tagsAutocompleteDropdown.classList.add('hidden');
-    activeAutocompleteIndex = -1;
-  }
-
-  function escapeHtml(str) {
-    return (str || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
-  // Tags input events
-  bookmarkTagsInput.addEventListener('input', () => {
-    renderTagsAutocomplete();
+  const bookmarkTagsComponent = new TagChipsComponent({
+    container: tagsInputContainer,
+    input: bookmarkTagsInput,
+    dropdown: tagsAutocompleteDropdown,
+    dropdownList: tagsDropdownList,
+    placeholder: 'Add tags...',
+    onChange: () => markAsEdited(),
+    getAllTags: () => allTags,
+    getRecentTags: () => recentTags
   });
 
-  bookmarkTagsInput.addEventListener('focus', () => {
-    renderTagsAutocomplete();
+  const tabsTagsComponent = new TagChipsComponent({
+    container: tabsTagsInputContainer,
+    input: tabsTagsInput,
+    dropdown: tabsTagsAutocompleteDropdown,
+    dropdownList: tabsTagsDropdownList,
+    placeholder: 'Add tags...',
+    onChange: () => {},
+    getAllTags: () => allTags,
+    getRecentTags: () => recentTags
   });
 
-  bookmarkTagsInput.addEventListener('keydown', (e) => {
-    const items = tagsDropdownList.querySelectorAll('.tag-dropdown-item');
-    const isDropdownOpen = !tagsAutocompleteDropdown.classList.contains('hidden') && items.length > 0;
-
-    if (e.key === 'ArrowDown') {
-      if (isDropdownOpen) {
-        e.preventDefault();
-        activeAutocompleteIndex = (activeAutocompleteIndex + 1) % items.length;
-        updateActiveAutocompleteItem(items);
-      }
-    } else if (e.key === 'ArrowUp') {
-      if (isDropdownOpen) {
-        e.preventDefault();
-        activeAutocompleteIndex = (activeAutocompleteIndex - 1 + items.length) % items.length;
-        updateActiveAutocompleteItem(items);
-      }
-    } else if (e.key === 'Enter') {
-      // If typing a tag, commit it rather than submitting the form prematurely
-      if (isDropdownOpen && activeAutocompleteIndex >= 0 && items[activeAutocompleteIndex]) {
-        e.preventDefault();
-        items[activeAutocompleteIndex].click();
-      } else if (isDropdownOpen && items.length > 0) {
-        e.preventDefault();
-        items[0].click();
-      } else {
-        const query = getCurrentTagQuery();
-        if (query) {
-          e.preventDefault();
-          insertTag(query);
-        }
-      }
-    } else if (e.key === 'Tab') {
-      if (isDropdownOpen && items.length > 0) {
-        e.preventDefault();
-        const target = (activeAutocompleteIndex >= 0 && items[activeAutocompleteIndex])
-          ? items[activeAutocompleteIndex]
-          : items[0];
-        target.click();
-      }
-    } else if (e.key === 'Escape') {
-      hideTagsDropdown();
-    }
-  });
-
-  function updateActiveAutocompleteItem(items) {
-    items.forEach((it, idx) => {
-      it.classList.toggle('active-item', idx === activeAutocompleteIndex);
-      if (idx === activeAutocompleteIndex) {
-        it.scrollIntoView({ block: 'nearest' });
-      }
-    });
-  }
-
-  // Close tags dropdown on outside click
+  // Close user menu on outside click
   document.addEventListener('click', (e) => {
-    if (!bookmarkTagsInput.contains(e.target) && !tagsAutocompleteDropdown.contains(e.target)) {
-      hideTagsDropdown();
-    }
     if (!userMenuBtn.contains(e.target) && !userDropdownMenu.contains(e.target)) {
       userDropdownMenu.classList.add('hidden');
     }
@@ -613,11 +869,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function initSaveTabsView() {
     openTabsList.innerHTML = '<div style="padding: 12px; color: var(--text-muted); font-size: 12px;">Loading tabs...</div>';
 
-    // Set prefilled date tag: e.g. #11/9/2026
+    // Set prefilled date tag as a removable chip: e.g. #11/9/2026
     const now = new Date();
     const dateTag = `#${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`;
-    if (!tabsTagsInput.value) {
-      tabsTagsInput.value = dateTag;
+    if (tabsTagsComponent.getTags().length === 0) {
+      tabsTagsComponent.setTags([dateTag]);
     }
 
     try {
@@ -701,10 +957,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     executeSaveTabsBtn.disabled = true;
     saveTabsSpinner.classList.remove('hidden');
 
-    const rawTags = tabsTagsInput.value.replace(/#/g, '').trim();
-    const tags = rawTags
-      ? Array.from(new Set(rawTags.split(/[,]+/).map(t => t.trim()).filter(Boolean)))
-      : [];
+    tabsTagsComponent.commitCurrentInput();
+    const rawTags = tabsTagsComponent.getTags();
+    const tags = Array.from(new Set(rawTags.map(t => t.trim().replace(/^#+/, '')).filter(Boolean)));
 
     const tabsToSave = openTabsData.filter(t => selectedIds.includes(t.id));
     const shouldClose = closeTabsCheckbox.checked;
@@ -721,6 +976,11 @@ document.addEventListener('DOMContentLoaded', async () => {
           collectionId: selectedCollectionId
         });
         savedCount++;
+      }
+
+      if (tags.length > 0) {
+        await RaindropStorage.addRecentTags(tags);
+        await loadRecentTags();
       }
 
       if (shouldClose && chrome?.tabs?.remove) {
@@ -782,7 +1042,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (item.excerpt) bookmarkExcerpt.value = item.excerpt;
         if (item.note) bookmarkNote.value = item.note;
         if (Array.isArray(item.tags) && item.tags.length > 0) {
-          bookmarkTagsInput.value = item.tags.join(', ') + ', ';
+          bookmarkTagsComponent.setTags(item.tags);
+        } else {
+          bookmarkTagsComponent.clear();
         }
         if (item.important) {
           setFavorite(true);
@@ -900,10 +1162,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const title = bookmarkTitle.value.trim();
     const excerpt = bookmarkExcerpt.value.trim();
     const note = bookmarkNote.value.trim();
-    const rawTags = bookmarkTagsInput.value.trim();
-    const tags = rawTags
-      ? Array.from(new Set(rawTags.split(/[,]+/).map(t => t.trim().replace(/^#+/, '')).filter(Boolean)))
-      : [];
+    bookmarkTagsComponent.commitCurrentInput();
+    const rawTags = bookmarkTagsComponent.getTags();
+    const tags = Array.from(new Set(rawTags.map(t => t.trim().replace(/^#+/, '')).filter(Boolean)));
 
     saveBookmarkBtn.disabled = true;
     saveBtnSpinner.classList.remove('hidden');
@@ -932,6 +1193,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       existingBookmark = savedItem;
       await RaindropStorage.setLastCollectionId(selectedCollectionId);
+
+      if (tags.length > 0) {
+        await RaindropStorage.addRecentTags(tags);
+        await loadRecentTags();
+      }
 
       headerStatusTitle.textContent = 'Saved';
       saveBtnText.textContent = 'Saved ✓';
@@ -962,9 +1228,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const words = title.split(/\s+/).filter(w => w.length > 3 && !/^(with|that|this|from|have|your|about|what|when|where)$/i.test(w));
     if (words.length > 0) {
       const suggested = words.slice(0, 2).map(w => w.toLowerCase().replace(/[^a-z0-9_-]/g, ''));
-      const current = bookmarkTagsInput.value.trim();
-      const combined = current ? `${current}, ${suggested.join(', ')}` : suggested.join(', ');
-      bookmarkTagsInput.value = combined + ', ';
+      suggested.forEach(t => bookmarkTagsComponent.addTag(t));
       markAsEdited();
       showBanner(`Suggested tags added: ${suggested.join(', ')}`, 'info', 2000);
     }
@@ -1055,8 +1319,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       updateUserProfileUI(user);
       showBanner(`Connected as ${user.fullName || user.email || 'Account B'}!`, 'info', 3000);
 
-      // Load collections and tags
-      await Promise.all([loadCollections(), loadTags()]);
+      // Load collections, tags, and recent tags
+      await Promise.all([loadCollections(), loadTags(), loadRecentTags()]);
 
       // If active tab exists, check if already saved
       if (currentTab?.url) {
@@ -1109,7 +1373,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     switchView('settings');
   } else {
     // Parallel data loading
-    Promise.all([loadCollections(), loadTags()]).catch(e => console.warn(e));
+    Promise.all([loadCollections(), loadTags(), loadRecentTags()]).catch(e => console.warn(e));
 
     // Verify token & sync user in background
     RaindropAPI.verifyToken(currentToken)
@@ -1125,3 +1389,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
   }
 });
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { TagChipsComponent, escapeHtml };
+}

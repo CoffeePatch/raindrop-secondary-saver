@@ -409,6 +409,259 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(popupCss.includes('.collection-pill-btn'), 'CSS includes .collection-pill-btn styling');
   assert(popupCss.includes('.save-gold-btn'), 'CSS includes .save-gold-btn styling');
 
+  console.log('\n=== 11. TAG CHIPS COMPONENT, RECENT TAGS PERSISTENCE & DROPDOWN GROUPING ===');
+  // 1. Test Recent Tags Persistence in RaindropStorage
+  const initialRecent = await RaindropStorage.getRecentTags();
+  assert(Array.isArray(initialRecent) && initialRecent.length === 0, 'RaindropStorage.getRecentTags defaults to empty array');
+
+  await RaindropStorage.setRecentTags(['IFTTT', 'YouTube', 'reading']);
+  const savedRecent = await RaindropStorage.getRecentTags();
+  assert(savedRecent.length === 3 && savedRecent[0] === 'IFTTT', 'RaindropStorage.setRecentTags saves recent tags');
+
+  // Test addRecentTags puts new tag first, strips #, and deduplicates case-insensitively
+  await RaindropStorage.addRecentTags(['#10/30/2026', 'YOUTUBE', 'towatch']);
+  const updatedRecent = await RaindropStorage.getRecentTags();
+  assert(updatedRecent[0] === '10/30/2026', 'addRecentTags places newest tags at front and strips #');
+  assert(updatedRecent.includes('towatch'), 'addRecentTags includes new towatch tag');
+  assert(updatedRecent.filter(t => t.toLowerCase() === 'youtube').length === 1, 'addRecentTags deduplicates existing tags case-insensitively');
+
+  // 2. Test Dropdown Grouping (RaindropAPI.groupTagsForDropdown)
+  const mockAllTags = [
+    { tag: 'javascript', count: 18 },
+    { tag: '2/8/2025', count: 7 },
+    { tag: '4/6/2025', count: 5 },
+    { tag: 'IFTTT', count: 12 },
+    { tag: 'archive', count: 1 }
+  ];
+  const mockRecentTags = ['IFTTT', 'YouTube', '10/30/2026', 'towatch', 'today'];
+
+  // Test grouping when query is empty: shows Recent and Other sections, no Add tag option
+  const groupedEmpty = RaindropAPI.groupTagsForDropdown('', [], mockRecentTags, mockAllTags);
+  assert(groupedEmpty.addTagOption === null, 'Dropdown with empty query has no addTagOption');
+  assert(groupedEmpty.recentMatches.length === 5, 'Dropdown includes all recent tags under Recent group');
+  assert(groupedEmpty.recentMatches[0].tag === 'IFTTT' && groupedEmpty.recentMatches[0].count === 12, 'Recent tags map usage counts from allTags if available');
+  assert(groupedEmpty.otherMatches.every(o => !mockRecentTags.map(r => r.toLowerCase()).includes(o.tag.toLowerCase())), 'Other group excludes tags already present in Recent group');
+  assert(groupedEmpty.otherMatches[0].tag === 'javascript' && groupedEmpty.otherMatches[0].count === 18, 'Other group is sorted by usage count descending');
+
+  // Test grouping when typing a query
+  const groupedQuery = RaindropAPI.groupTagsForDropdown('jav', [], mockRecentTags, mockAllTags);
+  assert(groupedQuery.addTagOption === 'jav', 'Dropdown displays + Add tag option matching query');
+  assert(groupedQuery.otherMatches.length === 1 && groupedQuery.otherMatches[0].tag === 'javascript', 'Dropdown filters Other group matching query');
+
+  // Test exclusion of already-selected chips
+  const groupedSelected = RaindropAPI.groupTagsForDropdown('', ['IFTTT', 'javascript'], mockRecentTags, mockAllTags);
+  assert(!groupedSelected.recentMatches.some(r => r.tag.toLowerCase() === 'ifttt'), 'Dropdown excludes already selected chips from Recent');
+  assert(!groupedSelected.otherMatches.some(o => o.tag.toLowerCase() === 'javascript'), 'Dropdown excludes already selected chips from Other');
+
+  // Test Add tag option omitted when query exactly matches an already-selected chip
+  const groupedExact = RaindropAPI.groupTagsForDropdown('ifttt', ['IFTTT'], mockRecentTags, mockAllTags);
+  assert(groupedExact.addTagOption === null, 'Add tag option omitted when query is already selected as a chip');
+
+  // 3. Test Interactive Tag Chips Component (Creation, Deletion, Date tag prefill)
+  function createMockElement(tag = 'div') {
+    let _className = '';
+    const classList = {
+      _classes: new Set(),
+      add(c) { this._classes.add(c); _className = Array.from(this._classes).join(' '); },
+      remove(c) { this._classes.delete(c); _className = Array.from(this._classes).join(' '); },
+      contains(c) { return this._classes.has(c); },
+      toggle(c, force) {
+        if (force === undefined) {
+          if (this._classes.has(c)) this._classes.delete(c);
+          else this._classes.add(c);
+        } else if (force) {
+          this._classes.add(c);
+        } else {
+          this._classes.delete(c);
+        }
+        _className = Array.from(this._classes).join(' ');
+      }
+    };
+    const el = {
+      tagName: tag.toUpperCase(),
+      classList,
+      dataset: {},
+      children: [],
+      childNodes: [],
+      value: '',
+      placeholder: '',
+      textContent: '',
+      innerHTML: '',
+      listeners: {},
+      addEventListener(evt, fn) {
+        if (!this.listeners[evt]) this.listeners[evt] = [];
+        this.listeners[evt].push(fn);
+      },
+      dispatchEvent(event) {
+        const list = this.listeners[event.type] || [];
+        for (const fn of list) fn(event);
+      },
+      click() {
+        if (this.listeners['click']) {
+          for (const fn of this.listeners['click']) fn({ type: 'click', target: this, stopPropagation: () => {} });
+        }
+      },
+      appendChild(child) {
+        child.parentElement = this;
+        this.children.push(child);
+        this.childNodes.push(child);
+        return child;
+      },
+      insertBefore(child, ref) {
+        child.parentElement = this;
+        const idx = this.children.indexOf(ref);
+        if (idx === -1) {
+          this.children.push(child);
+        } else {
+          this.children.splice(idx, 0, child);
+        }
+        this.childNodes = [...this.children];
+        return child;
+      },
+      removeChild(child) {
+        const idx = this.children.indexOf(child);
+        if (idx !== -1) {
+          this.children.splice(idx, 1);
+          child.parentElement = null;
+        }
+        this.childNodes = [...this.children];
+        return child;
+      },
+      remove() {
+        if (this.parentElement) {
+          this.parentElement.removeChild(this);
+        }
+      },
+      querySelectorAll(selector) {
+        const matches = [];
+        function walk(node) {
+          for (const child of node.children || []) {
+            if (selector.startsWith('.') && child.classList.contains(selector.slice(1))) {
+              matches.push(child);
+            }
+            walk(child);
+          }
+        }
+        walk(this);
+        return matches;
+      },
+      closest(sel) {
+        if (sel.startsWith('.') && this.classList.contains(sel.slice(1))) return this;
+        return null;
+      },
+      contains(other) {
+        if (this === other) return true;
+        for (const ch of this.children || []) {
+          if (ch === other || (ch.contains && ch.contains(other))) return true;
+        }
+        return false;
+      },
+      focus() { this.focused = true; },
+      blur() { this.focused = false; }
+    };
+    Object.defineProperty(el, 'className', {
+      get() { return _className; },
+      set(val) {
+        _className = val || '';
+        classList._classes = new Set(_className.split(/\s+/).filter(Boolean));
+      }
+    });
+    return el;
+  }
+
+  const mockDoc = {
+    createElement(t) { return createMockElement(t); },
+    addEventListener() {}
+  };
+
+  const { TagChipsComponent } = require(path.join(EXT_DIR, 'popup/popup.js'));
+  assert(typeof TagChipsComponent === 'function', 'TagChipsComponent is exported and defined');
+
+  // Setup mock container and input
+  const mockContainer = createMockElement('div');
+  const mockInput = createMockElement('input');
+  mockContainer.appendChild(mockInput);
+  const mockDropdown = createMockElement('div');
+  mockDropdown.classList.add('hidden');
+  const mockDropdownList = createMockElement('div');
+
+  let changeFired = false;
+  const chipComponent = new TagChipsComponent({
+    container: mockContainer,
+    input: mockInput,
+    dropdown: mockDropdown,
+    dropdownList: mockDropdownList,
+    placeholder: 'Add tags...',
+    onChange: () => { changeFired = true; },
+    getAllTags: () => mockAllTags,
+    getRecentTags: () => mockRecentTags,
+    doc: mockDoc
+  });
+
+  // Verify initial state
+  assert(chipComponent.getTags().length === 0, 'TagChipsComponent starts with empty tags');
+  assert(mockInput.placeholder === 'Add tags...', 'TagChipsComponent starts with Add tags... placeholder');
+
+  // Test chip creation
+  chipComponent.addTag('IFTTT');
+  assert(chipComponent.getTags().length === 1 && chipComponent.getTags()[0] === 'IFTTT', 'addTag adds IFTTT chip');
+  assert(changeFired === true, 'addTag triggers onChange callback');
+  changeFired = false;
+
+  const renderedChips = mockContainer.querySelectorAll('.tag-chip');
+  assert(renderedChips.length === 1, 'tag-chip DOM element is rendered inside container');
+  assert(renderedChips[0].dataset.tag === 'IFTTT', 'rendered chip has dataset.tag set to IFTTT');
+  assert(mockInput.placeholder === '', 'placeholder is cleared when chips are present');
+
+  // Verify chip internal structure (✕ remove button and text)
+  const removeButtons = renderedChips[0].querySelectorAll('.tag-chip-remove');
+  const textSpans = renderedChips[0].querySelectorAll('.tag-chip-text');
+  assert(removeButtons.length === 1 && removeButtons[0].textContent === '✕', 'tag chip contains ✕ remove button');
+  assert(textSpans.length === 1 && textSpans[0].textContent === 'IFTTT', 'tag chip contains tag name text');
+
+  // Test deduplication: adding existing tag does nothing
+  chipComponent.addTag('ifttt');
+  assert(chipComponent.getTags().length === 1, 'addTag ignores case-insensitive duplicate');
+
+  // Test Save Tabs View requirement: Date tag as a removable chip (#11/9/2026)
+  chipComponent.clear();
+  assert(chipComponent.getTags().length === 0, 'clear empties all chips');
+  assert(mockContainer.querySelectorAll('.tag-chip').length === 0, 'clear removes all chip elements from DOM');
+
+  chipComponent.setTags(['#11/9/2026']);
+  const dateChips = mockContainer.querySelectorAll('.tag-chip');
+  assert(dateChips.length === 1 && dateChips[0].dataset.tag === '#11/9/2026', 'Save Tabs: date tag is created as a removable chip (#11/9/2026)');
+
+  // Test 1-click chip deletion via chip click
+  dateChips[0].click();
+  assert(chipComponent.getTags().length === 0, '1-click removal: clicking tag chip deletes it');
+  assert(mockContainer.querySelectorAll('.tag-chip').length === 0, '1-click removal: chip element removed from DOM');
+
+  // Test Backspace chip deletion
+  chipComponent.setTags(['alpha', 'beta', 'gamma']);
+  assert(chipComponent.getTags().length === 3, 'setTags populates 3 chips');
+  chipComponent.removeLastTag();
+  assert(chipComponent.getTags().length === 2 && chipComponent.getTags()[1] === 'beta', 'removeLastTag removes last chip on Backspace');
+
+  // Test commitCurrentInput when saving
+  mockInput.value = 'typed-tag';
+  chipComponent.commitCurrentInput();
+  assert(chipComponent.getTags().includes('typed-tag'), 'commitCurrentInput converts in-progress typed text to chip before saving');
+
+  // 4. HTML & CSS Parity Checks for Tag Chips Component
+  assert(popupHtml.includes('id="tagsInputContainer"') && popupHtml.includes('class="tags-input-container"'), 'popup.html contains #tagsInputContainer with class tags-input-container');
+  assert(popupHtml.includes('id="tabsTagsInputContainer"') && popupHtml.includes('class="tags-input-container"'), 'popup.html contains #tabsTagsInputContainer with class tags-input-container in View 3');
+  assert(popupHtml.includes('id="tabsTagsAutocompleteDropdown"'), 'popup.html contains #tabsTagsAutocompleteDropdown for View 3');
+  assert(popupHtml.includes('class="tag-inline-input input-tags"'), 'popup.html uses .tag-inline-input for inline input');
+
+  // CSS Checks for tag chips and dropdown grouping
+  assert(popupCss.includes('.tag-chip'), 'CSS includes .tag-chip styling');
+  assert(popupCss.includes('.tag-chip-remove'), 'CSS includes .tag-chip-remove styling');
+  assert(popupCss.includes('.tag-chip:hover .tag-chip-remove') || popupCss.includes('.tag-chip-remove:hover'), 'CSS includes hover visibility for red ✕ remove button');
+  assert(popupCss.includes('.tag-inline-input'), 'CSS includes .tag-inline-input styling');
+  assert(popupCss.includes('.tag-dropdown-header'), 'CSS includes .tag-dropdown-header styling for Recent/Other grouping');
+  assert(popupCss.includes('.tag-dropdown-add'), 'CSS includes .tag-dropdown-add styling for + Add tag option');
+
   console.log(`\n========================================`);
   console.log(`Verification Complete: ${passed} Passed, ${failed} Failed`);
   if (failed > 0) {

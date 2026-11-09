@@ -126,7 +126,7 @@
             <span class="meta-label">Tags</span>
             <div class="meta-control tags-input-wrapper">
               <div id="tagsInputContainer" class="tags-input-container">
-                <input type="text" id="bookmarkTagsInput" class="input-tags" placeholder="Add tags..." autocomplete="off" />
+                <input type="text" id="bookmarkTagsInput" class="tag-inline-input input-tags" placeholder="Add tags..." autocomplete="off" />
               </div>
 
               <!-- Custom Autocomplete Dropdown -->
@@ -299,10 +299,19 @@
         </div>
 
         <!-- Tags Row with Date prefilled -->
-        <div class="meta-row">
+        <div class="meta-row tags-row">
           <span class="meta-label">Tags</span>
-          <div class="meta-control">
-            <input type="text" id="tabsTagsInput" class="input-tags" placeholder="#MM/DD/YYYY" />
+          <div class="meta-control tags-input-wrapper">
+            <div id="tabsTagsInputContainer" class="tags-input-container">
+              <input type="text" id="tabsTagsInput" class="tag-inline-input input-tags" placeholder="Add tags..." autocomplete="off" />
+            </div>
+
+            <!-- Custom Autocomplete Dropdown for Tabs -->
+            <div id="tabsTagsAutocompleteDropdown" class="tags-dropdown hidden">
+              <div id="tabsTagsDropdownList" class="tags-dropdown-list">
+                <!-- Tag items dynamically injected -->
+              </div>
+            </div>
           </div>
         </div>
 

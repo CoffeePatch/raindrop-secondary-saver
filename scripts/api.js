@@ -97,6 +97,65 @@ const RaindropStorage = {
     } catch (e) {
       // ignore
     }
+  },
+
+  async getRecentTags() {
+    if (typeof chrome === 'undefined' || !chrome.storage) return [];
+    try {
+      const data = await chrome.storage.local.get(['raindrop_recent_tags']);
+      if (Array.isArray(data?.raindrop_recent_tags)) {
+        return data.raindrop_recent_tags;
+      }
+      return [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  async setRecentTags(tags) {
+    if (typeof chrome === 'undefined' || !chrome.storage) return [];
+    try {
+      const clean = Array.isArray(tags)
+        ? Array.from(new Set(tags.map(t => String(t).trim().replace(/^#+/, '')).filter(Boolean))).slice(0, 30)
+        : [];
+      await chrome.storage.local.set({ raindrop_recent_tags: clean });
+      return clean;
+    } catch (e) {
+      return [];
+    }
+  },
+
+  async addRecentTags(newTags) {
+    if (typeof chrome === 'undefined' || !chrome.storage) return [];
+    try {
+      const current = await this.getRecentTags();
+      const rawList = Array.isArray(newTags) ? newTags : [newTags];
+      const cleanNew = rawList
+        .map(t => String(t).trim().replace(/^#+/, ''))
+        .filter(Boolean);
+
+      const seen = new Set();
+      const combined = [];
+      for (const t of cleanNew) {
+        const lower = t.toLowerCase();
+        if (!seen.has(lower)) {
+          seen.add(lower);
+          combined.push(t);
+        }
+      }
+      for (const t of current) {
+        const lower = t.toLowerCase();
+        if (!seen.has(lower)) {
+          seen.add(lower);
+          combined.push(t);
+        }
+      }
+      const finalRecent = combined.slice(0, 30);
+      await chrome.storage.local.set({ raindrop_recent_tags: finalRecent });
+      return finalRecent;
+    } catch (e) {
+      return [];
+    }
   }
 };
 
@@ -308,6 +367,77 @@ const RaindropAPI = {
       console.warn('Failed to fetch tags:', e);
       return [];
     }
+  },
+
+  /**
+   * Group and filter tags into 'Recent' and 'Other' sections for the dropdown
+   */
+  groupTagsForDropdown(query = '', selectedTags = [], recentTags = [], allTags = []) {
+    const selectedSet = new Set(
+      (selectedTags || [])
+        .map(t => String(t).trim().replace(/^#+/, '').toLowerCase())
+        .filter(Boolean)
+    );
+    const q = (query || '').trim().replace(/^#+/, '').toLowerCase();
+
+    // Fast count lookup map from allTags
+    const countMap = new Map();
+    for (const item of allTags || []) {
+      const name = typeof item === 'string' ? item : item?.tag;
+      const count = typeof item === 'object' && typeof item?.count === 'number' ? item.count : 0;
+      if (name) {
+        countMap.set(String(name).toLowerCase(), { tag: String(name), count });
+      }
+    }
+
+    // 1. Add Tag Option if query is non-empty and not already selected
+    let addTagOption = null;
+    if (q.length > 0 && !selectedSet.has(q)) {
+      addTagOption = (query || '').trim().replace(/^#+/, '');
+    }
+
+    // 2. Recent tags matching query
+    const recentMatches = [];
+    const recentSeen = new Set();
+    for (const rTag of recentTags || []) {
+      const cleanR = String(rTag).trim().replace(/^#+/, '');
+      const lowerR = cleanR.toLowerCase();
+      if (!cleanR || selectedSet.has(lowerR) || recentSeen.has(lowerR)) continue;
+      if (!q || lowerR.includes(q)) {
+        recentSeen.add(lowerR);
+        const count = countMap.has(lowerR) ? countMap.get(lowerR).count : 0;
+        recentMatches.push({ tag: cleanR, count });
+      }
+    }
+
+    // 3. Other tags matching query (sorted by count descending, then alphabetical)
+    const sortedAll = [...(allTags || [])].sort((a, b) => {
+      const countA = typeof a === 'object' && typeof a?.count === 'number' ? a.count : 0;
+      const countB = typeof b === 'object' && typeof b?.count === 'number' ? b.count : 0;
+      if (countB !== countA) return countB - countA;
+      const nameA = typeof a === 'string' ? a : (a?.tag || '');
+      const nameB = typeof b === 'string' ? b : (b?.tag || '');
+      return String(nameA).localeCompare(String(nameB));
+    });
+
+    const otherMatches = [];
+    for (const item of sortedAll) {
+      const name = typeof item === 'string' ? item : item?.tag;
+      const count = typeof item === 'object' && typeof item?.count === 'number' ? item.count : 0;
+      if (!name) continue;
+      const cleanName = String(name).trim().replace(/^#+/, '');
+      const lower = cleanName.toLowerCase();
+      if (!cleanName || selectedSet.has(lower) || recentSeen.has(lower)) continue;
+      if (!q || lower.includes(q)) {
+        otherMatches.push({ tag: cleanName, count });
+      }
+    }
+
+    return {
+      addTagOption,
+      recentMatches: recentMatches.slice(0, 10),
+      otherMatches: otherMatches.slice(0, 30)
+    };
   },
 
   /**
