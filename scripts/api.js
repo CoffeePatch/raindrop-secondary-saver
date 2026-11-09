@@ -300,8 +300,6 @@ const RaindropAPI = {
         icon = coll.cover[0];
       } else if (typeof coll.cover === 'string' && coll.cover) {
         icon = coll.cover;
-      } else if (coll.public) {
-        icon = '🌐';
       }
 
       result.push({
@@ -572,11 +570,21 @@ const RaindropAPI = {
   }
 };
 
-// Export to window for extension contexts, and module for testing
+// Export to global scope for extension contexts (window, self, worker), and module for testing
+const globalScope = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : {}));
+globalScope.RaindropStorage = RaindropStorage;
+globalScope.RaindropAPI = RaindropAPI;
+globalScope.RaindropAPIError = RaindropAPIError;
+
 if (typeof window !== 'undefined') {
   window.RaindropStorage = RaindropStorage;
   window.RaindropAPI = RaindropAPI;
   window.RaindropAPIError = RaindropAPIError;
+}
+if (typeof self !== 'undefined') {
+  self.RaindropStorage = RaindropStorage;
+  self.RaindropAPI = RaindropAPI;
+  self.RaindropAPIError = RaindropAPIError;
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { RaindropStorage, RaindropAPI, RaindropAPIError };

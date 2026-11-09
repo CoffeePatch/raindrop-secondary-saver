@@ -30,6 +30,7 @@ assert(manifest.permissions.includes('tabs'), 'permissions includes tabs');
 assert(manifest.host_permissions && manifest.host_permissions.includes('https://api.raindrop.io/*'), 'host_permissions includes api.raindrop.io');
 assert(manifest.action && manifest.action.default_popup === 'popup/popup.html', 'action.default_popup is set');
 assert(manifest.options_ui && manifest.options_ui.page === 'options/options.html', 'options_ui.page is set');
+assert(manifest.background && manifest.background.service_worker === 'background.js', 'manifest includes background.service_worker');
 
 console.log('\n=== 2. ICON CHECKS ===');
 for (const size of ['16', '32', '48', '128']) {
@@ -44,7 +45,8 @@ console.log('\n=== 3. JAVASCRIPT SYNTAX VERIFICATION ===');
 const jsFiles = [
   'scripts/api.js',
   'popup/popup.js',
-  'options/options.js'
+  'options/options.js',
+  'background.js'
 ];
 
 for (const rel of jsFiles) {
@@ -399,15 +401,23 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(popupHtml.includes('id="settingsTokenInput"'), 'popup.html contains personal access token input');
   assert(popupHtml.includes('id="submitTokenBtn"'), 'popup.html contains token verify & connect button');
 
-  // CSS Checks
+  // AMOLED CSS Checks
   const popupCss = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.css'), 'utf8');
-  assert(popupCss.includes('--bg-primary: #1e2022') || popupCss.includes('#1e2022'), 'CSS includes primary background #1e2022');
-  assert(popupCss.includes('--bg-secondary: #232528') || popupCss.includes('#232528'), 'CSS includes card background #232528');
-  assert(popupCss.includes('--bg-input: #2a2c30') || popupCss.includes('#2a2c30'), 'CSS includes input background #2a2c30');
+  assert(popupCss.includes('--bg-primary: #000000') || popupCss.includes('#000000'), 'CSS includes AMOLED pure black background #000000');
+  assert(popupCss.includes('--bg-secondary: #080808') || popupCss.includes('#080808'), 'CSS includes AMOLED card/secondary background #080808');
+  assert(popupCss.includes('--bg-input: #141414') || popupCss.includes('#141414'), 'CSS includes AMOLED input background #141414');
+  assert(popupCss.includes('--border-subtle: #262626') || popupCss.includes('#262626'), 'CSS includes subtle border #262626');
+  assert(popupCss.includes('--text-primary: #ffffff') || popupCss.includes('#ffffff'), 'CSS includes crisp white primary text #ffffff');
+  assert(popupCss.includes('--text-secondary: #9e9e9e') || popupCss.includes('#9e9e9e'), 'CSS includes clean secondary/label text #9e9e9e');
   assert(popupCss.includes('--accent-gold: #d4b476') || popupCss.includes('#d4b476'), 'CSS includes gold accent #d4b476');
   assert(popupCss.includes('.tags-dropdown'), 'CSS includes .tags-dropdown custom autocomplete styling');
   assert(popupCss.includes('.collection-pill-btn'), 'CSS includes .collection-pill-btn styling');
   assert(popupCss.includes('.save-gold-btn'), 'CSS includes .save-gold-btn styling');
+
+  // Save tabs layout checks (no dead space)
+  assert(popupCss.includes('.tabs-list-wrapper') && popupCss.includes('overflow: hidden'), 'CSS tabs-list-wrapper has flex layout without fixed dead height');
+  assert(popupCss.includes('.open-tabs-list') && popupCss.includes('overflow-y: auto') && popupCss.includes('flex: 1'), 'CSS open-tabs-list has flex: 1 and overflow-y: auto for smooth scrolling');
+  assert(popupCss.includes('.tabs-bottom-bar'), 'CSS includes .tabs-bottom-bar pinning action button cleanly to bottom');
 
   console.log('\n=== 11. TAG CHIPS COMPONENT, RECENT TAGS PERSISTENCE & DROPDOWN GROUPING ===');
   // 1. Test Recent Tags Persistence in RaindropStorage
@@ -701,6 +711,64 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(popupCss.includes('.tag-inline-input'), 'CSS includes .tag-inline-input styling');
   assert(popupCss.includes('.tag-dropdown-header'), 'CSS includes .tag-dropdown-header styling for Recent/Other grouping');
   assert(popupCss.includes('.tag-dropdown-add'), 'CSS includes .tag-dropdown-add styling for + Add tag option');
+
+  console.log('\n=== 12. EMOJI CLEANING, BACKGROUND WORKER & TOOLBAR BADGE ===');
+  // 1. Emoji Cleaning
+  const popupJsContent = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.js'), 'utf8');
+  assert(!popupJsContent.includes('👥'), 'popup.js does not contain two-people emoji 👥');
+  assert(!popupHtml.includes('👥'), 'popup.html does not contain two-people emoji 👥');
+  const apiJsContent = fs.readFileSync(path.join(EXT_DIR, 'scripts/api.js'), 'utf8');
+  assert(!apiJsContent.includes("'🌐'"), 'scripts/api.js does not force public globe emoji 🌐 on collections');
+
+  // 2. Background Worker Tests
+  const backgroundWorker = require(path.join(EXT_DIR, 'background.js'));
+  assert(typeof backgroundWorker.isCheckableUrl === 'function', 'background.js exports isCheckableUrl');
+  assert(backgroundWorker.isCheckableUrl('https://example.com/page'), 'isCheckableUrl accepts https:// URL');
+  assert(backgroundWorker.isCheckableUrl('http://insecure.org'), 'isCheckableUrl accepts http:// URL');
+  assert(!backgroundWorker.isCheckableUrl('chrome://extensions'), 'isCheckableUrl rejects chrome:// URL');
+  assert(!backgroundWorker.isCheckableUrl('about:blank'), 'isCheckableUrl rejects about:blank URL');
+  assert(!backgroundWorker.isCheckableUrl(''), 'isCheckableUrl rejects empty string');
+  assert(!backgroundWorker.isCheckableUrl(null), 'isCheckableUrl rejects null');
+
+  // 3. Mock Chrome Action Badge tests
+  let lastBadgeText = null;
+  let lastBadgeColor = null;
+  let lastBadgeTitle = null;
+  global.chrome.action = {
+    setBadgeText: ({ tabId, text }) => { lastBadgeText = text; },
+    setBadgeBackgroundColor: ({ tabId, color }) => { lastBadgeColor = color; },
+    setTitle: ({ tabId, title }) => { lastBadgeTitle = title; }
+  };
+
+  backgroundWorker.setTabBadge(123);
+  assert(lastBadgeText === '✓', 'setTabBadge sets checkmark text ✓');
+  assert(lastBadgeColor === '#10B981', 'setTabBadge sets Account B green badge background #10B981');
+  assert(lastBadgeTitle === 'Saved in Raindrop (Account B)', 'setTabBadge sets Account B title');
+
+  backgroundWorker.clearTabBadge(123);
+  assert(lastBadgeText === '', 'clearTabBadge clears badge text');
+  assert(lastBadgeTitle === 'Save to Secondary Raindrop', 'clearTabBadge resets default title');
+
+  // 4. Test updateTabBadge with RaindropAPI mock
+  global.RaindropStorage = RaindropStorage;
+  global.RaindropAPI = RaindropAPI;
+
+  await RaindropStorage.setToken('test-token-active');
+  const originalCheckUrl = RaindropAPI.checkUrl;
+  RaindropAPI.checkUrl = async (token, url) => {
+    if (url === 'https://saved-article.com') {
+      return { _id: 999, title: 'Saved Article' };
+    }
+    return null;
+  };
+
+  await backgroundWorker.updateTabBadge(456, 'https://saved-article.com');
+  assert(lastBadgeText === '✓', 'updateTabBadge sets ✓ badge when URL is bookmarked in Account B');
+
+  await backgroundWorker.updateTabBadge(456, 'https://unsaved-article.com');
+  assert(lastBadgeText === '', 'updateTabBadge clears badge when URL is not bookmarked');
+
+  RaindropAPI.checkUrl = originalCheckUrl;
 
   console.log(`\n========================================`);
   console.log(`Verification Complete: ${passed} Passed, ${failed} Failed`);

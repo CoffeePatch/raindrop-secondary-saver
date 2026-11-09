@@ -11,6 +11,9 @@
   "host_permissions": [
     "https://api.raindrop.io/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "Save to Secondary Raindrop",

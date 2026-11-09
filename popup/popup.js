@@ -819,13 +819,11 @@ if (typeof document !== 'undefined') {
       }
 
       const iconDisplay = coll.icon || '📁';
-      const sharedIcon = coll.shared ? `<span class="coll-shared-icon" title="Shared collection">👥</span>` : '';
 
       itemEl.innerHTML = `
         <div class="coll-left">
           <span class="coll-icon">${escapeHtml(iconDisplay)}</span>
           <span class="coll-title">${escapeHtml(coll.title)}</span>
-          ${sharedIcon}
         </div>
         <span class="coll-count">${coll.count || 0}</span>
       `;
@@ -1022,6 +1020,18 @@ if (typeof document !== 'undefined') {
           collectionId: selectedCollectionId
         });
         savedCount++;
+
+        // Update tab badge if tab id available
+        if (tab.id) {
+          if (typeof chrome !== 'undefined' && chrome.action?.setBadgeText) {
+            chrome.action.setBadgeText({ tabId: tab.id, text: '✓' });
+            chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#10B981' });
+            chrome.action.setTitle({ tabId: tab.id, title: 'Saved in Raindrop (Account B)' });
+          }
+          if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+            chrome.runtime.sendMessage({ action: 'setTabBadge', tabId: tab.id }).catch(() => {});
+          }
+        }
       }
 
       if (tags.length > 0) {
@@ -1076,6 +1086,26 @@ if (typeof document !== 'undefined') {
     }
   }
 
+  function updateToolbarBadge(saved) {
+    if (!currentTab?.id) return;
+    if (typeof chrome !== 'undefined' && chrome.action?.setBadgeText) {
+      if (saved) {
+        chrome.action.setBadgeText({ tabId: currentTab.id, text: '✓' });
+        chrome.action.setBadgeBackgroundColor({ tabId: currentTab.id, color: '#10B981' });
+        chrome.action.setTitle({ tabId: currentTab.id, title: 'Saved in Raindrop (Account B)' });
+      } else {
+        chrome.action.setBadgeText({ tabId: currentTab.id, text: '' });
+        chrome.action.setTitle({ tabId: currentTab.id, title: 'Save to Secondary Raindrop' });
+      }
+    }
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({
+        action: saved ? 'setTabBadge' : 'clearTabBadge',
+        tabId: currentTab.id
+      }).catch(() => {});
+    }
+  }
+
   async function checkBookmarkStatus(url) {
     try {
       const item = await RaindropAPI.checkUrl(currentToken, url);
@@ -1084,6 +1114,7 @@ if (typeof document !== 'undefined') {
         headerStatusTitle.textContent = 'Saved';
         saveBtnText.textContent = 'Saved ✓';
         deleteBookmarkBtn.classList.remove('hidden');
+        updateToolbarBadge(true);
 
         if (item.title) bookmarkTitle.value = item.title;
         if (item.excerpt) bookmarkExcerpt.value = item.excerpt;
@@ -1116,6 +1147,7 @@ if (typeof document !== 'undefined') {
         headerStatusTitle.textContent = 'Edit';
         saveBtnText.textContent = 'Save';
         deleteBookmarkBtn.classList.add('hidden');
+        updateToolbarBadge(false);
       }
     } catch (e) {
       // Non-fatal
@@ -1172,6 +1204,7 @@ if (typeof document !== 'undefined') {
       headerStatusTitle.textContent = 'Edit';
       saveBtnText.textContent = 'Save';
       deleteBookmarkBtn.classList.add('hidden');
+      updateToolbarBadge(false);
       showBanner('Bookmark removed from Raindrop.', 'info', 3000);
       if (typeof window !== 'undefined' && window.close) {
         setTimeout(() => window.close(), 1200);
@@ -1249,6 +1282,7 @@ if (typeof document !== 'undefined') {
       headerStatusTitle.textContent = 'Saved';
       saveBtnText.textContent = 'Saved ✓';
       deleteBookmarkBtn.classList.remove('hidden');
+      updateToolbarBadge(true);
       showBanner('Bookmark saved to Account B!', 'info', 2500);
 
       // Reload tags in background to update counts

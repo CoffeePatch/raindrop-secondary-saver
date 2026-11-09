@@ -84,7 +84,7 @@ To connect Account B:
 - Triggered by clicking the Collection pill button.
 - Real-time search filter: `🔍 Find or create new collection...`.
 - Special collections: `〰 Unsorted` (id: 0) and `🗑 Trash` (id: -99) with live counts.
-- User collections: Hierarchically indented tree with custom icons/emojis, shared indicator `👥`, and count badges.
+- User collections: Hierarchically indented tree with custom collection icons and count badges (clutter-free without collaborator emojis).
 - One-click creation: If typed collection does not exist, click `+ Create collection "[query]"` to create and select it instantly.
 
 ### 3. Save Tabs Subview
