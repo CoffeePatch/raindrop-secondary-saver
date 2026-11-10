@@ -380,6 +380,7 @@ const RaindropAPI = {
         const trimmed = coll.icon.trim();
         // Use clean emoji or non-URL string icon. External image URLs stall network, so fall back cleanly to 📁
         if (
+          trimmed &&
           !trimmed.startsWith('http://') &&
           !trimmed.startsWith('https://') &&
           !trimmed.startsWith('data:') &&

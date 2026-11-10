@@ -1344,7 +1344,8 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
     { _id: 2, title: 'Media & Videos', icon: '📺', sort: 1 },
     { _id: 3, title: 'Remote Stalled Item', cover: ['https://up.raindrop.io/collection/thumbs/443/537/90/a61be.png'], sort: 2 },
     { _id: 4, title: 'Remote URL Icon', icon: 'https://up.raindrop.io/icon.svg', sort: 3 },
-    { _id: 5, title: 'Default Folder Item', sort: 4 }
+    { _id: 5, title: 'Default Folder Item', sort: 4 },
+    { _id: 6, title: 'Whitespace Icon Item', icon: '   ', sort: 5 }
   ];
   const builtEmojiHierarchy = RaindropAPI.buildCollectionHierarchy(emojiRoots, []);
 
@@ -1353,17 +1354,26 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   const stalledNode = builtEmojiHierarchy.find(c => c.id === 3);
   const urlIconNode = builtEmojiHierarchy.find(c => c.id === 4);
   const defaultNode = builtEmojiHierarchy.find(c => c.id === 5);
+  const whitespaceNode = builtEmojiHierarchy.find(c => c.id === 6);
 
   assert(hotNode && hotNode.icon === '🔥', 'Custom emoji icon 🔥 is preserved without being overwritten');
   assert(mediaNode && mediaNode.icon === '📺', 'Custom emoji icon 📺 is preserved without being overwritten');
   assert(stalledNode && stalledNode.icon === '📁', 'Remote thumbnail URL in cover falls back cleanly to 📁 (eliminates 30-50s network stalls)');
   assert(urlIconNode && urlIconNode.icon === '📁', 'Remote URL icon falls back cleanly to 📁');
   assert(defaultNode && defaultNode.icon === '📁', 'Unspecified icon defaults cleanly to 📁');
+  assert(whitespaceNode && whitespaceNode.icon === '📁', 'Whitespace icon defaults cleanly to 📁');
 
   // 5. CSS checks for collections loading spinner and empty state
   const latestPopupCss = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.css'), 'utf8');
   assert(latestPopupCss.includes('.collections-loading'), 'popup.css includes .collections-loading styles');
   assert(latestPopupCss.includes('.collections-empty-state'), 'popup.css includes .collections-empty-state styles');
+
+  // 6. Verification of Collection Selection Race Condition Fixes & Startup Preloading
+  const latestPopupJs = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.js'), 'utf8');
+  assert(latestPopupJs.includes('userManuallySelectedCollection'), 'popup.js tracks userManuallySelectedCollection to prevent background overwrite');
+  assert(latestPopupJs.includes('existingBookmark?.collection?.$id'), 'popup.js preserves existing bookmark collection during background sync');
+  assert(latestPopupJs.includes('RaindropStorage.getCachedTags()') && latestPopupJs.includes('allTags = cachedTags'), 'popup.js preloads cached tags for 0ms tag autocomplete on open');
+  assert(latestPopupJs.includes('expandedInitialized'), 'popup.js distinguishes empty saved expanded collection set from first run');
 
   console.log(`\n========================================`);
   console.log(`Verification Complete: ${passed} Passed, ${failed} Failed`);

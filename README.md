@@ -2,7 +2,7 @@
 
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-success?style=flat-square&color=34d399)](https://developer.chrome.com/docs/extensions/mv3/intro/)
 [![Tested on Brave & Chrome](https://img.shields.io/badge/Browser-Brave%20%7C%20Chrome-6366f1?style=flat-square)](https://brave.com/)
-[![Tests: 352 Passed](https://img.shields.io/badge/Tests-352%20Passed-10b981?style=flat-square)](./test_verification.js)
+[![Tests: 357 Passed](https://img.shields.io/badge/Tests-357%20Passed-10b981?style=flat-square)](./test_verification.js)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](./LICENSE)
 
 A high-performance, lightweight, pixel-perfect **Manifest V3** browser extension specifically engineered to save bookmarks directly to a **secondary Raindrop.io account (Account B)** while keeping your primary account active in the official Raindrop extension—**in the very same browser profile with zero cookie or session conflicts**.
@@ -141,7 +141,7 @@ raindrop-secondary-saver/
 │   ├── icon-48.png            # 48x48 extension manager icon
 │   ├── icon-128.png           # 128x128 store icon
 │   └── icon.svg               # Scalable SVG master
-├── test_verification.js       # Comprehensive automated test suite (352 assertions)
+├── test_verification.js       # Comprehensive automated test suite (357 assertions)
 ├── .gitignore                 # Clean repository git rules
 └── README.md                  # Documentation & usage guide
 ```
@@ -156,7 +156,7 @@ The repository includes a comprehensive zero-dependency test suite running on No
 node test_verification.js
 ```
 
-### Verification Coverage (352 Automated Assertions):
+### Verification Coverage (357 Automated Assertions):
 - **Manifest V3 Structure**: Validates MV3 permissions (`activeTab`, `storage`, `tabs`, `host_permissions`).
 - **Icon Dimensions**: Pillow-verified 16x16, 32x32, 48x48, 128x128 icons.
 - **REST Client & Storage**: Bearer token sanitation, quota handling, quote stripping, cache serialization.

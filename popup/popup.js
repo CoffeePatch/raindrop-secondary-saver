@@ -644,6 +644,8 @@ if (typeof document !== 'undefined') {
   let selectedCollectionId = 0;
   let selectedCollectionTitle = 'Unsorted';
   let selectedCollectionIcon = '〰';
+  let userManuallySelectedCollection = false;
+  let expandedInitialized = false;
 
   let rawCollections = [];
   let userCollections = [];
@@ -863,7 +865,13 @@ if (typeof document !== 'undefined') {
 
   function applyCollectionsData(colls, stats = [], preloadedLastId = null) {
     if (!Array.isArray(colls)) return;
-    rawCollections = colls;
+    rawCollections = colls.map(c => {
+      let icon = c.icon || '📁';
+      if (isUrlIcon(icon)) {
+        icon = '📁';
+      }
+      return { ...c, icon };
+    });
     userCollections = rawCollections.filter(c => c.id !== 0 && c.id !== -99);
 
     // Populate special collection counts from stats
@@ -879,25 +887,38 @@ if (typeof document !== 'undefined') {
     if (unsortedCountBadge) unsortedCountBadge.textContent = unsortedCount;
     if (trashCountBadge) trashCountBadge.textContent = trashCount;
 
-    // Check last used collection
-    const checkLast = async () => {
-      const lastId = (preloadedLastId !== null && preloadedLastId !== undefined)
-        ? preloadedLastId
-        : await RaindropStorage.getLastCollectionId();
-      const match = rawCollections.find(c => Number(c.id) === Number(lastId));
+    // Resolve active collection pill without overwriting existing bookmark or manual selection
+    const updateActivePill = async () => {
+      let targetId;
+      if (userManuallySelectedCollection) {
+        targetId = selectedCollectionId;
+      } else if (existingBookmark?.collection?.$id !== undefined) {
+        targetId = Number(existingBookmark.collection.$id);
+      } else {
+        targetId = (preloadedLastId !== null && preloadedLastId !== undefined)
+          ? Number(preloadedLastId)
+          : Number(await RaindropStorage.getLastCollectionId());
+      }
+
+      const match = rawCollections.find(c => Number(c.id) === Number(targetId));
       if (match) {
         updateCollectionPills(match.id, match.title, match.icon);
-      } else {
+      } else if (Number(targetId) === 0) {
         updateCollectionPills(0, 'Unsorted', '〰');
+      } else if (Number(targetId) === -99) {
+        updateCollectionPills(-99, 'Trash', '🗑');
+      } else {
+        updateCollectionPills(targetId, 'Collection', '📁');
       }
     };
-    checkLast();
+    updateActivePill();
 
-    // Default expandedCollectionIds if empty
-    if (expandedCollectionIds.size === 0 && userCollections.some(c => c.hasChildren)) {
+    // Default expandedCollectionIds if empty AND not yet initialized from storage
+    if (!expandedInitialized && userCollections.some(c => c.hasChildren)) {
       expandedCollectionIds = new Set(
         userCollections.filter(c => c.hasChildren).map(c => Number(c.id))
       );
+      expandedInitialized = true;
       RaindropStorage.setExpandedCollectionIds(Array.from(expandedCollectionIds));
     }
 
@@ -932,6 +953,7 @@ if (typeof document !== 'undefined') {
         updatedAt: Date.now()
       });
 
+      isLoadingCollections = false;
       applyCollectionsData(colls, stats);
     } catch (e) {
       console.warn('Failed to load collections:', e);
@@ -940,8 +962,8 @@ if (typeof document !== 'undefined') {
       }
     } finally {
       isLoadingCollections = false;
-      // Re-render if viewCollection is active to ensure UI is fresh and clean
-      if (viewCollection && viewCollection.classList.contains('active')) {
+      // Re-render if viewCollection is active and list is empty to clear spinner if error occurred
+      if (viewCollection && viewCollection.classList.contains('active') && userCollections.length === 0) {
         renderCollectionsList(collectionSearchInput ? collectionSearchInput.value : '');
       }
     }
@@ -954,6 +976,7 @@ if (typeof document !== 'undefined') {
     } else {
       expandedCollectionIds.add(numId);
     }
+    expandedInitialized = true;
     RaindropStorage.setExpandedCollectionIds(Array.from(expandedCollectionIds));
     renderCollectionsList(collectionSearchInput ? collectionSearchInput.value : '');
   }
@@ -1103,6 +1126,7 @@ if (typeof document !== 'undefined') {
   }
 
   function selectCollectionAndReturn(id, title, icon) {
+    userManuallySelectedCollection = true;
     updateCollectionPills(id, title, icon);
     RaindropStorage.setLastCollectionId(id);
     switchView(previousView === 'tabs' ? 'tabs' : 'main');
@@ -1469,9 +1493,16 @@ if (typeof document !== 'undefined') {
           thumbFallback.classList.add('hidden');
         }
         if (item.collection?.$id !== undefined) {
-          const matched = rawCollections.find(c => Number(c.id) === Number(item.collection.$id));
+          const targetId = Number(item.collection.$id);
+          const matched = rawCollections.find(c => Number(c.id) === targetId);
           if (matched) {
             updateCollectionPills(matched.id, matched.title, matched.icon);
+          } else if (targetId === 0) {
+            updateCollectionPills(0, 'Unsorted', '〰');
+          } else if (targetId === -99) {
+            updateCollectionPills(-99, 'Trash', '🗑');
+          } else {
+            updateCollectionPills(targetId, 'Collection', '📁');
           }
         }
       } else {
@@ -1781,14 +1812,20 @@ if (typeof document !== 'undefined') {
   }
 
   // Preload cached collections, tags, and expanded states for instant 0ms display
-  const [cachedData, savedExpanded, lastId] = await Promise.all([
+  const [cachedData, savedExpanded, lastId, cachedTags] = await Promise.all([
     RaindropStorage.getCachedCollections(),
     RaindropStorage.getExpandedCollectionIds(),
-    RaindropStorage.getLastCollectionId()
+    RaindropStorage.getLastCollectionId(),
+    RaindropStorage.getCachedTags()
   ]);
 
   if (Array.isArray(savedExpanded)) {
     expandedCollectionIds = new Set(savedExpanded.map(Number));
+    expandedInitialized = true;
+  }
+
+  if (Array.isArray(cachedTags) && cachedTags.length > 0) {
+    allTags = cachedTags;
   }
 
   if (cachedData && Array.isArray(cachedData.collections) && cachedData.collections.length > 0) {
