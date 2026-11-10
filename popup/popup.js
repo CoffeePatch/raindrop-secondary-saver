@@ -32,7 +32,7 @@ function isUrlIcon(icon) {
 function renderIconHtml(icon, defaultIcon = '📁') {
   const ic = (icon !== undefined && icon !== null && icon !== '') ? icon : defaultIcon;
   if (isUrlIcon(ic)) {
-    return `<img class="coll-icon-img" src="${escapeHtml(ic.trim())}" alt="" />`;
+    return `<img class="coll-icon-img" src="${escapeHtml(ic.trim())}" alt="" loading="lazy" decoding="async" />`;
   }
   return escapeHtml(ic);
 }
@@ -804,10 +804,17 @@ if (typeof document !== 'undefined') {
   async function loadTags() {
     if (!currentToken) return;
     try {
+      if (allTags.length === 0) {
+        const cached = await RaindropStorage.getCachedTags();
+        if (Array.isArray(cached) && cached.length > 0 && allTags.length === 0) {
+          allTags = cached;
+        }
+      }
       allTags = await RaindropAPI.getTags(currentToken);
+      await RaindropStorage.setCachedTags(allTags);
     } catch (e) {
       console.warn('Failed to load tags:', e);
-      allTags = [];
+      if (allTags.length === 0) allTags = [];
     }
   }
 
@@ -852,55 +859,90 @@ if (typeof document !== 'undefined') {
   // ==========================================
   // VIEW 2: Collections Engine & Hierarchy
   // ==========================================
-  async function loadCollections() {
-    if (!currentToken) return;
-    try {
-      const [colls, stats] = await Promise.all([
-        RaindropAPI.getCollections(currentToken),
-        RaindropAPI.getUserStats(currentToken).catch(() => [])
-      ]);
+  let isLoadingCollections = false;
 
-      rawCollections = colls;
-      userCollections = rawCollections.filter(c => c.id !== 0 && c.id !== -99);
+  function applyCollectionsData(colls, stats = [], preloadedLastId = null) {
+    if (!Array.isArray(colls)) return;
+    rawCollections = colls;
+    userCollections = rawCollections.filter(c => c.id !== 0 && c.id !== -99);
 
-      // Populate special collection counts from GET /user/stats
-      // Raindrop returns _id: -1 (Unsorted) and _id: -99 (Trash)
-      const unsortedStat = stats.find(s => s._id === -1 || s._id === 0);
-      const trashStat = stats.find(s => s._id === -99);
-      const unsortedCount = unsortedStat ? unsortedStat.count || 0 : 0;
-      const trashCount = trashStat ? trashStat.count || 0 : 0;
+    // Populate special collection counts from stats
+    const unsortedStat = (stats || []).find(s => s._id === -1 || s._id === 0);
+    const trashStat = (stats || []).find(s => s._id === -99);
+    const unsortedCount = unsortedStat ? unsortedStat.count || 0 : 0;
+    const trashCount = trashStat ? trashStat.count || 0 : 0;
 
-      const unsortedObj = rawCollections.find(c => c.id === 0);
-      if (unsortedObj) {
-        unsortedObj.count = unsortedCount;
-      }
-      if (unsortedCountBadge) unsortedCountBadge.textContent = unsortedCount;
-      if (trashCountBadge) trashCountBadge.textContent = trashCount;
+    const unsortedObj = rawCollections.find(c => c.id === 0);
+    if (unsortedObj) {
+      unsortedObj.count = unsortedCount;
+    }
+    if (unsortedCountBadge) unsortedCountBadge.textContent = unsortedCount;
+    if (trashCountBadge) trashCountBadge.textContent = trashCount;
 
-      // Check last used collection
-      const lastId = await RaindropStorage.getLastCollectionId();
+    // Check last used collection
+    const checkLast = async () => {
+      const lastId = (preloadedLastId !== null && preloadedLastId !== undefined)
+        ? preloadedLastId
+        : await RaindropStorage.getLastCollectionId();
       const match = rawCollections.find(c => Number(c.id) === Number(lastId));
       if (match) {
         updateCollectionPills(match.id, match.title, match.icon);
       } else {
         updateCollectionPills(0, 'Unsorted', '〰');
       }
+    };
+    checkLast();
 
-      // Check expanded collection IDs
-      const savedExpanded = await RaindropStorage.getExpandedCollectionIds();
-      if (Array.isArray(savedExpanded)) {
-        expandedCollectionIds = new Set(savedExpanded.map(Number));
-      } else {
-        // First run: expand all parent collections (with children) by default
-        expandedCollectionIds = new Set(
-          userCollections.filter(c => c.hasChildren).map(c => Number(c.id))
-        );
-        await RaindropStorage.setExpandedCollectionIds(Array.from(expandedCollectionIds));
+    // Default expandedCollectionIds if empty
+    if (expandedCollectionIds.size === 0 && userCollections.some(c => c.hasChildren)) {
+      expandedCollectionIds = new Set(
+        userCollections.filter(c => c.hasChildren).map(c => Number(c.id))
+      );
+      RaindropStorage.setExpandedCollectionIds(Array.from(expandedCollectionIds));
+    }
+
+    // If currently viewing collection picker, re-render immediately!
+    if (viewCollection && viewCollection.classList.contains('active')) {
+      if (selectedCollectionId && selectedCollectionId !== 0 && selectedCollectionId !== -99) {
+        expandAncestorsOf(selectedCollectionId, userCollections, expandedCollectionIds);
       }
+      renderCollectionsList(collectionSearchInput ? collectionSearchInput.value : '');
+    }
+  }
+
+  async function loadCollections() {
+    if (!currentToken) return;
+    isLoadingCollections = true;
+
+    // If collections list is currently active and empty, show loader immediately
+    if (viewCollection && viewCollection.classList.contains('active') && userCollections.length === 0) {
+      renderCollectionsList(collectionSearchInput ? collectionSearchInput.value : '');
+    }
+
+    try {
+      const [colls, stats] = await Promise.all([
+        RaindropAPI.getCollections(currentToken),
+        RaindropAPI.getUserStats(currentToken).catch(() => [])
+      ]);
+
+      // Cache fresh collections & stats immediately
+      await RaindropStorage.setCachedCollections({
+        collections: colls,
+        stats: stats,
+        updatedAt: Date.now()
+      });
+
+      applyCollectionsData(colls, stats);
     } catch (e) {
       console.warn('Failed to load collections:', e);
       if (e.status === 401) {
         switchView('settings');
+      }
+    } finally {
+      isLoadingCollections = false;
+      // Re-render if viewCollection is active to ensure UI is fresh and clean
+      if (viewCollection && viewCollection.classList.contains('active')) {
+        renderCollectionsList(collectionSearchInput ? collectionSearchInput.value : '');
       }
     }
   }
@@ -943,6 +985,15 @@ if (typeof document !== 'undefined') {
       sectionLabelRow.style.display = term ? 'none' : 'block';
     }
 
+    // If still loading and no collections cached yet:
+    if (isLoadingCollections && userCollections.length === 0) {
+      const loadingEl = document.createElement('div');
+      loadingEl.className = 'collections-loading';
+      loadingEl.innerHTML = `<span class="spinner"></span> <span>Loading collections...</span>`;
+      userCollectionsList.appendChild(loadingEl);
+      return;
+    }
+
     const collMap = new Map(userCollections.map(c => [Number(c.id), c]));
 
     // Filter user collections
@@ -966,6 +1017,14 @@ if (typeof document !== 'undefined') {
       }
     } else {
       createNewCollectionItem.classList.add('hidden');
+    }
+
+    if (filtered.length === 0 && !term && userCollections.length === 0 && !isLoadingCollections) {
+      const emptyEl = document.createElement('div');
+      emptyEl.className = 'collections-empty-state';
+      emptyEl.textContent = 'No custom collections';
+      userCollectionsList.appendChild(emptyEl);
+      return;
     }
 
     filtered.forEach(coll => {
@@ -1721,12 +1780,29 @@ if (typeof document !== 'undefined') {
     updateUserProfileUI(cachedUser);
   }
 
+  // Preload cached collections, tags, and expanded states for instant 0ms display
+  const [cachedData, savedExpanded, lastId] = await Promise.all([
+    RaindropStorage.getCachedCollections(),
+    RaindropStorage.getExpandedCollectionIds(),
+    RaindropStorage.getLastCollectionId()
+  ]);
+
+  if (Array.isArray(savedExpanded)) {
+    expandedCollectionIds = new Set(savedExpanded.map(Number));
+  }
+
+  if (cachedData && Array.isArray(cachedData.collections) && cachedData.collections.length > 0) {
+    applyCollectionsData(cachedData.collections, cachedData.stats || [], lastId);
+  } else if (lastId !== undefined && lastId !== null) {
+    updateCollectionPills(lastId, lastId === 0 ? 'Unsorted' : 'Collection', lastId === 0 ? '〰' : '📁');
+  }
+
   await loadActiveTab();
 
   if (!currentToken) {
     switchView('settings');
   } else {
-    // Parallel data loading
+    // Parallel data loading & background refresh
     Promise.all([loadCollections(), loadTags(), loadRecentTags()]).catch(e => console.warn(e));
 
     // Verify token & sync user in background

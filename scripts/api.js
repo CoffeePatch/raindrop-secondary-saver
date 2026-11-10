@@ -45,13 +45,22 @@ const RaindropStorage = {
 
   async clearToken() {
     if (typeof chrome === 'undefined' || !chrome.storage) return;
+    const keys = [
+      'raindrop_token',
+      'raindrop_user',
+      'raindrop_last_collection',
+      'raindrop_expanded_collections',
+      'raindrop_recent_tags',
+      'raindrop_cached_collections',
+      'raindrop_cached_tags'
+    ];
     try {
-      await chrome.storage.sync.remove(['raindrop_token', 'raindrop_user']);
+      await chrome.storage.sync.remove(keys);
     } catch (e) {
       // ignore
     }
     try {
-      await chrome.storage.local.remove(['raindrop_token', 'raindrop_user']);
+      await chrome.storage.local.remove(keys);
     } catch (e) {
       // ignore
     }
@@ -181,6 +190,46 @@ const RaindropStorage = {
       return finalRecent;
     } catch (e) {
       return [];
+    }
+  },
+
+  async getCachedCollections() {
+    if (typeof chrome === 'undefined' || !chrome.storage) return null;
+    try {
+      const data = await chrome.storage.local.get(['raindrop_cached_collections']);
+      return data?.raindrop_cached_collections ?? null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  async setCachedCollections(payload) {
+    if (typeof chrome === 'undefined' || !chrome.storage) return null;
+    try {
+      await chrome.storage.local.set({ raindrop_cached_collections: payload });
+      return payload;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  async getCachedTags() {
+    if (typeof chrome === 'undefined' || !chrome.storage) return null;
+    try {
+      const data = await chrome.storage.local.get(['raindrop_cached_tags']);
+      return data?.raindrop_cached_tags ?? null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  async setCachedTags(tags) {
+    if (typeof chrome === 'undefined' || !chrome.storage) return null;
+    try {
+      await chrome.storage.local.set({ raindrop_cached_tags: tags });
+      return tags;
+    } catch (e) {
+      return null;
     }
   }
 };
@@ -327,12 +376,18 @@ const RaindropAPI = {
       visited.add(lookupId);
 
       let icon = '📁';
-      if (coll.cover && Array.isArray(coll.cover) && coll.cover[0]) {
-        icon = coll.cover[0];
-      } else if (typeof coll.cover === 'string' && coll.cover) {
-        icon = coll.cover;
-      } else if (coll.icon) {
-        icon = coll.icon;
+      if (coll.icon && typeof coll.icon === 'string') {
+        const trimmed = coll.icon.trim();
+        // Use clean emoji or non-URL string icon. External image URLs stall network, so fall back cleanly to 📁
+        if (
+          !trimmed.startsWith('http://') &&
+          !trimmed.startsWith('https://') &&
+          !trimmed.startsWith('data:') &&
+          !trimmed.startsWith('blob:') &&
+          !trimmed.startsWith('/')
+        ) {
+          icon = trimmed;
+        }
       }
 
       const children = childrenByParent.get(lookupId) || [];

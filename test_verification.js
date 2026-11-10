@@ -1306,6 +1306,65 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(pillIconCssMatch && pillIconCssMatch[0].includes('width: 18px'), '.pill-icon sets explicit width: 18px');
   assert(pillIconCssMatch && pillIconCssMatch[0].includes('height: 18px'), '.pill-icon sets explicit height: 18px');
 
+  console.log('\n=== 15. CACHED COLLECTIONS & TAGS, CLEAN EMOJI ICONS & STALL ELIMINATION ===');
+  // 1. Storage tests for Collections Cache
+  delete mockLocalStorage['raindrop_cached_collections'];
+  const initialCache = await RaindropStorage.getCachedCollections();
+  assert(initialCache === null, 'getCachedCollections returns null when unset');
+
+  const testCachePayload = {
+    collections: [{ id: 10, title: 'Dev' }],
+    stats: [{ _id: -1, count: 4 }],
+    updatedAt: Date.now()
+  };
+  await RaindropStorage.setCachedCollections(testCachePayload);
+  const retrievedCache = await RaindropStorage.getCachedCollections();
+  assert(retrievedCache && Array.isArray(retrievedCache.collections) && retrievedCache.collections.length === 1, 'setCachedCollections stores and retrieves collections payload');
+  assert(retrievedCache.stats && retrievedCache.stats[0]._id === -1, 'setCachedCollections stores stats');
+
+  // 2. Storage tests for Tags Cache
+  delete mockLocalStorage['raindrop_cached_tags'];
+  const initialTagCache = await RaindropStorage.getCachedTags();
+  assert(initialTagCache === null, 'getCachedTags returns null when unset');
+
+  await RaindropStorage.setCachedTags([{ tag: 'javascript', count: 12 }, { tag: 'css', count: 8 }]);
+  const retrievedTagCache = await RaindropStorage.getCachedTags();
+  assert(Array.isArray(retrievedTagCache) && retrievedTagCache.length === 2, 'setCachedTags stores and retrieves cached tags');
+
+  // 3. clearToken clears cached collections and tags
+  await RaindropStorage.clearToken();
+  const clearedCache = await RaindropStorage.getCachedCollections();
+  const clearedTagCache = await RaindropStorage.getCachedTags();
+  assert(clearedCache === null, 'clearToken clears cached collections');
+  assert(clearedTagCache === null, 'clearToken clears cached tags');
+
+  // 4. Remote Image Stall Elimination & Clean Emoji Icon Preservation in Hierarchy
+  const emojiRoots = [
+    { _id: 1, title: 'Hot Topics', icon: '🔥', sort: 0 },
+    { _id: 2, title: 'Media & Videos', icon: '📺', sort: 1 },
+    { _id: 3, title: 'Remote Stalled Item', cover: ['https://up.raindrop.io/collection/thumbs/443/537/90/a61be.png'], sort: 2 },
+    { _id: 4, title: 'Remote URL Icon', icon: 'https://up.raindrop.io/icon.svg', sort: 3 },
+    { _id: 5, title: 'Default Folder Item', sort: 4 }
+  ];
+  const builtEmojiHierarchy = RaindropAPI.buildCollectionHierarchy(emojiRoots, []);
+
+  const hotNode = builtEmojiHierarchy.find(c => c.id === 1);
+  const mediaNode = builtEmojiHierarchy.find(c => c.id === 2);
+  const stalledNode = builtEmojiHierarchy.find(c => c.id === 3);
+  const urlIconNode = builtEmojiHierarchy.find(c => c.id === 4);
+  const defaultNode = builtEmojiHierarchy.find(c => c.id === 5);
+
+  assert(hotNode && hotNode.icon === '🔥', 'Custom emoji icon 🔥 is preserved without being overwritten');
+  assert(mediaNode && mediaNode.icon === '📺', 'Custom emoji icon 📺 is preserved without being overwritten');
+  assert(stalledNode && stalledNode.icon === '📁', 'Remote thumbnail URL in cover falls back cleanly to 📁 (eliminates 30-50s network stalls)');
+  assert(urlIconNode && urlIconNode.icon === '📁', 'Remote URL icon falls back cleanly to 📁');
+  assert(defaultNode && defaultNode.icon === '📁', 'Unspecified icon defaults cleanly to 📁');
+
+  // 5. CSS checks for collections loading spinner and empty state
+  const latestPopupCss = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.css'), 'utf8');
+  assert(latestPopupCss.includes('.collections-loading'), 'popup.css includes .collections-loading styles');
+  assert(latestPopupCss.includes('.collections-empty-state'), 'popup.css includes .collections-empty-state styles');
+
   console.log(`\n========================================`);
   console.log(`Verification Complete: ${passed} Passed, ${failed} Failed`);
   if (failed > 0) {
