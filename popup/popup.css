@@ -484,6 +484,10 @@ body {
 .pill-icon {
   font-size: 13px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 .pill-title {
   white-space: nowrap;
@@ -891,15 +895,55 @@ body {
 .coll-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
+
+.coll-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+  border-radius: 3px;
+  transition: color 0.12s, background-color 0.12s;
+}
+.coll-chevron:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-hover);
+}
+
+.coll-chevron-spacer {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
 .coll-icon {
   font-size: 14px;
   line-height: 1;
   flex-shrink: 0;
   width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
+}
+
+.coll-icon-img {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  object-fit: cover;
+  vertical-align: middle;
+  display: block;
 }
 .coll-title {
   white-space: nowrap;

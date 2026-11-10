@@ -11,6 +11,51 @@ function escapeHtml(str) {
 }
 
 /**
+ * Checks if a collection icon is a URL/cover image
+ */
+function isUrlIcon(icon) {
+  if (typeof icon !== 'string') return false;
+  const trimmed = icon.trim();
+  return (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('/')
+  );
+}
+
+/**
+ * Renders collection icon as <img> tag if it is a URL, or escaped text if emoji/string
+ */
+function renderIconHtml(icon, defaultIcon = '📁') {
+  const ic = (icon !== undefined && icon !== null && icon !== '') ? icon : defaultIcon;
+  if (isUrlIcon(ic)) {
+    return `<img class="coll-icon-img" src="${escapeHtml(ic.trim())}" alt="" />`;
+  }
+  return escapeHtml(ic);
+}
+
+/**
+ * Checks if a collection should be visible in the hierarchical tree given expanded collection IDs
+ */
+function isCollectionVisible(coll, expandedSet, collMap) {
+  if (!coll) return false;
+  let currentParentId = coll.parentId;
+  const visited = new Set();
+  while (currentParentId !== null && currentParentId !== undefined) {
+    if (visited.has(currentParentId)) break;
+    visited.add(currentParentId);
+    if (!expandedSet || !expandedSet.has(Number(currentParentId))) {
+      return false;
+    }
+    const parent = collMap ? collMap.get(Number(currentParentId)) : null;
+    if (!parent) break;
+    currentParentId = parent.parentId;
+  }
+  return true;
+}
+
+/**
  * Applies Shift+Click range selection across a list of checkboxes
  */
 function applyShiftClickRangeSelection(checkboxes, clickedIndex, lastIndex, targetState) {
@@ -574,6 +619,7 @@ if (typeof document !== 'undefined') {
 
   let rawCollections = [];
   let userCollections = [];
+  let expandedCollectionIds = new Set();
   let allTags = []; // Array of { tag: string, count: number }
   let activeAutocompleteIndex = -1;
   let previousView = 'main'; // For returning from Collection View to Tabs View or Main View
@@ -673,11 +719,24 @@ if (typeof document !== 'undefined') {
     selectedCollectionTitle = title;
     selectedCollectionIcon = icon || '📁';
 
-    pillIcon.textContent = selectedCollectionIcon;
-    pillTitle.textContent = selectedCollectionTitle;
+    const iconHtml = renderIconHtml(selectedCollectionIcon);
+    if (pillIcon) {
+      if (isUrlIcon(selectedCollectionIcon)) {
+        pillIcon.innerHTML = iconHtml;
+      } else {
+        pillIcon.textContent = selectedCollectionIcon;
+      }
+    }
+    if (pillTitle) pillTitle.textContent = selectedCollectionTitle;
 
-    tabsPillIcon.textContent = selectedCollectionIcon;
-    tabsPillTitle.textContent = selectedCollectionTitle;
+    if (tabsPillIcon) {
+      if (isUrlIcon(selectedCollectionIcon)) {
+        tabsPillIcon.innerHTML = iconHtml;
+      } else {
+        tabsPillIcon.textContent = selectedCollectionIcon;
+      }
+    }
+    if (tabsPillTitle) tabsPillTitle.textContent = selectedCollectionTitle;
   }
 
   function updateUserProfileUI(user) {
@@ -783,12 +842,35 @@ if (typeof document !== 'undefined') {
       } else {
         updateCollectionPills(0, 'Unsorted', '〰');
       }
+
+      // Check expanded collection IDs
+      const savedExpanded = await RaindropStorage.getExpandedCollectionIds();
+      if (Array.isArray(savedExpanded)) {
+        expandedCollectionIds = new Set(savedExpanded.map(Number));
+      } else {
+        // First run: expand all parent collections (with children) by default
+        expandedCollectionIds = new Set(
+          userCollections.filter(c => c.hasChildren).map(c => Number(c.id))
+        );
+        await RaindropStorage.setExpandedCollectionIds(Array.from(expandedCollectionIds));
+      }
     } catch (e) {
       console.warn('Failed to load collections:', e);
       if (e.status === 401) {
         switchView('settings');
       }
     }
+  }
+
+  function toggleCollectionExpanded(id) {
+    const numId = Number(id);
+    if (expandedCollectionIds.has(numId)) {
+      expandedCollectionIds.delete(numId);
+    } else {
+      expandedCollectionIds.add(numId);
+    }
+    RaindropStorage.setExpandedCollectionIds(Array.from(expandedCollectionIds));
+    renderCollectionsList(collectionSearchInput ? collectionSearchInput.value : '');
   }
 
   function renderCollectionsList(searchTerm = '') {
@@ -818,15 +900,21 @@ if (typeof document !== 'undefined') {
       sectionLabelRow.style.display = term ? 'none' : 'block';
     }
 
+    const collMap = new Map(userCollections.map(c => [Number(c.id), c]));
+
     // Filter user collections
     const filtered = userCollections.filter(coll => {
-      if (!term) return true;
+      if (!term) {
+        // When not searching, respect collapsed/expanded parent state
+        return isCollectionVisible(coll, expandedCollectionIds, collMap);
+      }
+      // When searching, all matching collections must be visible regardless of collapsed parent state
       return (coll.title || '').toLowerCase().includes(term);
     });
 
     if (term) {
       // Check if term matches exact collection title
-      const exactMatch = userCollections.some(c => c.title.toLowerCase() === term);
+      const exactMatch = userCollections.some(c => (c.title || '').toLowerCase() === term);
       if (!exactMatch) {
         createNewCollectionItem.classList.remove('hidden');
         createCollectionText.textContent = `Create collection "${term}"`;
@@ -840,6 +928,7 @@ if (typeof document !== 'undefined') {
     filtered.forEach(coll => {
       const itemEl = document.createElement('div');
       itemEl.className = 'collection-item';
+      itemEl.dataset.id = String(coll.id);
       if (Number(coll.id) === Number(selectedCollectionId)) {
         itemEl.classList.add('active-selected');
       }
@@ -851,14 +940,41 @@ if (typeof document !== 'undefined') {
       }
 
       const iconDisplay = coll.icon || '📁';
+      const isExpanded = expandedCollectionIds.has(Number(coll.id));
+
+      let chevronHtml = '';
+      if (coll.hasChildren) {
+        chevronHtml = `<span class="coll-chevron" data-id="${coll.id}" role="button" tabindex="0" title="${isExpanded ? 'Collapse' : 'Expand'}">${isExpanded ? '▼' : '▶'}</span>`;
+      } else {
+        chevronHtml = `<span class="coll-chevron-spacer"></span>`;
+      }
+
+      const iconHtml = renderIconHtml(iconDisplay);
 
       itemEl.innerHTML = `
         <div class="coll-left">
-          <span class="coll-icon">${escapeHtml(iconDisplay)}</span>
+          ${chevronHtml}
+          <span class="coll-icon">${iconHtml}</span>
           <span class="coll-title">${escapeHtml(coll.title)}</span>
         </div>
         <span class="coll-count">${coll.count || 0}</span>
       `;
+
+      const chevronEl = itemEl.querySelector('.coll-chevron');
+      if (chevronEl) {
+        chevronEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          toggleCollectionExpanded(coll.id);
+        });
+        chevronEl.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.stopPropagation();
+            e.preventDefault();
+            toggleCollectionExpanded(coll.id);
+          }
+        });
+      }
 
       itemEl.addEventListener('click', () => {
         selectCollectionAndReturn(coll.id, coll.title, iconDisplay);
@@ -1571,5 +1687,12 @@ if (typeof document !== 'undefined') {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { TagChipsComponent, escapeHtml, applyShiftClickRangeSelection };
+  module.exports = {
+    TagChipsComponent,
+    escapeHtml,
+    applyShiftClickRangeSelection,
+    isUrlIcon,
+    renderIconHtml,
+    isCollectionVisible
+  };
 }

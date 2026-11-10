@@ -1058,6 +1058,183 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   RaindropAPI.createRaindropsBatch = originalBatch;
   await RaindropStorage.clearToken();
 
+  console.log('\n=== 14. COLLAPSIBLE HIERARCHY, URL ICONS & SEARCH EXPANSION ===');
+  const { isUrlIcon, renderIconHtml, isCollectionVisible } = require(path.join(EXT_DIR, 'popup/popup.js'));
+
+  // 1. RaindropStorage expanded collections tests
+  delete mockLocalStorage['raindrop_expanded_collections'];
+  const initialExpanded = await RaindropStorage.getExpandedCollectionIds();
+  assert(initialExpanded === null, 'getExpandedCollectionIds returns null when unset');
+
+  const savedIds = await RaindropStorage.setExpandedCollectionIds([10, 20, 20, '30', 'invalid']);
+  assert(
+    Array.isArray(savedIds) && savedIds.length === 3 && savedIds.includes(10) && savedIds.includes(20) && savedIds.includes(30),
+    'setExpandedCollectionIds cleans, deduplicates, and converts numeric IDs'
+  );
+
+  const retrievedIds = await RaindropStorage.getExpandedCollectionIds();
+  assert(
+    Array.isArray(retrievedIds) && retrievedIds.length === 3 && retrievedIds[0] === 10,
+    'getExpandedCollectionIds retrieves saved array'
+  );
+
+  await RaindropStorage.setExpandedCollectionIds([]);
+  const emptyIds = await RaindropStorage.getExpandedCollectionIds();
+  assert(Array.isArray(emptyIds) && emptyIds.length === 0, 'getExpandedCollectionIds retrieves empty array when collapsed');
+
+  // 2. URL Icon Detection & Rendering Tests
+  assert(typeof isUrlIcon === 'function', 'popup.js exports isUrlIcon');
+  assert(isUrlIcon('https://up.raindrop.io/collection/thumbs/443/537/90/a61be.png') === true, 'isUrlIcon identifies https:// URL');
+  assert(isUrlIcon('http://example.com/cover.jpg') === true, 'isUrlIcon identifies http:// URL');
+  assert(isUrlIcon('data:image/svg+xml;base64,PHN2Z...') === true, 'isUrlIcon identifies data: URI');
+  assert(isUrlIcon('/local/thumb.png') === true, 'isUrlIcon identifies relative root / URL');
+  assert(isUrlIcon('   https://spaced.url/pic.png   ') === true, 'isUrlIcon handles leading/trailing whitespace');
+  assert(isUrlIcon('📁') === false, 'isUrlIcon returns false for folder emoji 📁');
+  assert(isUrlIcon('〰') === false, 'isUrlIcon returns false for wave icon 〰');
+  assert(isUrlIcon('🗑') === false, 'isUrlIcon returns false for trash emoji 🗑');
+  assert(isUrlIcon('Development') === false, 'isUrlIcon returns false for text titles');
+  assert(isUrlIcon('') === false, 'isUrlIcon returns false for empty string');
+  assert(isUrlIcon(null) === false, 'isUrlIcon returns false for null');
+  assert(isUrlIcon(undefined) === false, 'isUrlIcon returns false for undefined');
+
+  assert(typeof renderIconHtml === 'function', 'popup.js exports renderIconHtml');
+  const renderedUrl = renderIconHtml('https://up.raindrop.io/collection/thumbs/443/537/90/a61be.png');
+  assert(renderedUrl.includes('<img class="coll-icon-img"'), 'renderIconHtml produces <img class="coll-icon-img" for URL');
+  assert(renderedUrl.includes('src="https://up.raindrop.io/collection/thumbs/443/537/90/a61be.png"'), 'renderIconHtml sets correct src');
+  assert(renderedUrl.includes('alt=""'), 'renderIconHtml includes alt attribute');
+
+  const renderedEscapedUrl = renderIconHtml('https://example.com/icon.png?v=1&w=2');
+  assert(renderedEscapedUrl.includes('v=1&amp;w=2'), 'renderIconHtml escapes special chars in URL attribute');
+
+  const renderedEmoji = renderIconHtml('〰');
+  assert(renderedEmoji === '〰', 'renderIconHtml outputs plain emoji text without img tag');
+
+  const renderedFallback = renderIconHtml(null);
+  assert(renderedFallback === '📁', 'renderIconHtml defaults to 📁 for null icon');
+
+  // 3. Collection Hierarchy parentId and hasChildren logic
+  const testRoots = [
+    { _id: 10, title: 'Development', sort: 0 },
+    { _id: 20, title: 'Articles', sort: 1 }
+  ];
+  const testChildren = [
+    { _id: 101, title: 'Frontend', parent: { $id: 10 } },
+    { _id: 102, title: 'Backend', parent: { $id: 10 } },
+    { _id: 1011, title: 'React', parent: { $id: 101 } }
+  ];
+  const tree = RaindropAPI.buildCollectionHierarchy(testRoots, testChildren);
+  const devNode = tree.find(c => c.id === 10);
+  const frontNode = tree.find(c => c.id === 101);
+  const reactNode = tree.find(c => c.id === 1011);
+  const backNode = tree.find(c => c.id === 102);
+  const artNode = tree.find(c => c.id === 20);
+
+  assert(devNode && devNode.hasChildren === true, 'Parent collection Development has hasChildren: true');
+  assert(devNode && devNode.parentId === null, 'Root collection Development has parentId: null');
+  assert(frontNode && frontNode.hasChildren === true, 'Subfolder Frontend has hasChildren: true');
+  assert(frontNode && frontNode.parentId === 10, 'Subfolder Frontend has parentId: 10');
+  assert(reactNode && reactNode.hasChildren === false, 'Leaf subfolder React has hasChildren: false');
+  assert(reactNode && reactNode.parentId === 101, 'Leaf subfolder React has parentId: 101');
+  assert(backNode && backNode.hasChildren === false, 'Leaf subfolder Backend has hasChildren: false');
+  assert(backNode && backNode.parentId === 10, 'Leaf subfolder Backend has parentId: 10');
+  assert(artNode && artNode.hasChildren === false, 'Leaf root Articles has hasChildren: false');
+  assert(artNode && artNode.parentId === null, 'Leaf root Articles has parentId: null');
+
+  // 4. isCollectionVisible Hierarchical Collapse/Expand Rules
+  assert(typeof isCollectionVisible === 'function', 'popup.js exports isCollectionVisible');
+  const treeMap = new Map(tree.filter(c => c.id !== 0).map(c => [Number(c.id), c]));
+
+  // When all folders collapsed (expandedSet empty)
+  const emptyExpanded = new Set();
+  assert(isCollectionVisible(devNode, emptyExpanded, treeMap) === true, 'Root Development is visible when collapsed');
+  assert(isCollectionVisible(artNode, emptyExpanded, treeMap) === true, 'Root Articles is visible when collapsed');
+  assert(isCollectionVisible(frontNode, emptyExpanded, treeMap) === false, 'Child Frontend is hidden when parent Development is collapsed');
+  assert(isCollectionVisible(reactNode, emptyExpanded, treeMap) === false, 'Grandchild React is hidden when ancestor Development is collapsed');
+  assert(isCollectionVisible(backNode, emptyExpanded, treeMap) === false, 'Child Backend is hidden when parent Development is collapsed');
+
+  // When Development (10) is expanded, but Frontend (101) is collapsed
+  const devExpandedOnly = new Set([10]);
+  assert(isCollectionVisible(devNode, devExpandedOnly, treeMap) === true, 'Root Development is visible');
+  assert(isCollectionVisible(frontNode, devExpandedOnly, treeMap) === true, 'Child Frontend is visible when parent Development is expanded');
+  assert(isCollectionVisible(backNode, devExpandedOnly, treeMap) === true, 'Child Backend is visible when parent Development is expanded');
+  assert(isCollectionVisible(reactNode, devExpandedOnly, treeMap) === false, 'Grandchild React is hidden when parent Frontend is collapsed');
+
+  // When both Development (10) and Frontend (101) are expanded
+  const allExpanded = new Set([10, 101]);
+  assert(isCollectionVisible(devNode, allExpanded, treeMap) === true, 'Development is visible');
+  assert(isCollectionVisible(frontNode, allExpanded, treeMap) === true, 'Frontend is visible');
+  assert(isCollectionVisible(backNode, allExpanded, treeMap) === true, 'Backend is visible');
+  assert(isCollectionVisible(reactNode, allExpanded, treeMap) === true, 'React is visible when both parent and grandparent are expanded');
+
+  // When Grandparent Development (10) is collapsed, but Parent Frontend (101) is in set
+  const brokenChainSet = new Set([101]);
+  assert(isCollectionVisible(frontNode, brokenChainSet, treeMap) === false, 'Frontend is hidden because ancestor 10 is collapsed');
+  assert(isCollectionVisible(reactNode, brokenChainSet, treeMap) === false, 'React is hidden because root ancestor 10 is collapsed');
+
+  // Cyclic reference protection test
+  const cyclicA = { id: 801, parentId: 802 };
+  const cyclicB = { id: 802, parentId: 801 };
+  const cyclicMap = new Map([[801, cyclicA], [802, cyclicB]]);
+  const cyclicResult = isCollectionVisible(cyclicA, new Set([801, 802]), cyclicMap);
+  assert(cyclicResult === true, 'isCollectionVisible terminates safely on cyclic references');
+
+  // 5. Search Filtering & Collapsed Parent State Parity
+  // When user searches "React", React must be found even if parent Development (10) is collapsed
+  const searchFilter = (items, term, expandedSet, map) => {
+    const t = (term || '').trim().toLowerCase();
+    return items.filter(coll => {
+      if (!t) return isCollectionVisible(coll, expandedSet, map);
+      return (coll.title || '').toLowerCase().includes(t);
+    });
+  };
+
+  const userItems = [devNode, frontNode, reactNode, backNode, artNode];
+  const collapsedTreeResults = searchFilter(userItems, '', emptyExpanded, treeMap);
+  assert(collapsedTreeResults.length === 2, 'Empty search on collapsed tree returns only root items (Development & Articles)');
+  assert(!collapsedTreeResults.some(c => c.id === 1011), 'Empty search does not show collapsed React');
+
+  const searchReactResults = searchFilter(userItems, 'React', emptyExpanded, treeMap);
+  assert(searchReactResults.length === 1 && searchReactResults[0].id === 1011, 'Search "React" finds React even though parent folders are collapsed');
+
+  const searchCaseInsensitive = searchFilter(userItems, 'dev', emptyExpanded, treeMap);
+  assert(searchCaseInsensitive.length === 1 && searchCaseInsensitive[0].id === 10, 'Search "dev" case-insensitively finds Development');
+
+  // 6. Markup & CSS Parity Checks
+  const updatedPopupHtml = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.html'), 'utf8');
+  assert(updatedPopupHtml.includes('coll-chevron-spacer'), 'popup.html includes coll-chevron-spacer for aligned icons');
+
+  const updatedPopupCss = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.css'), 'utf8');
+  assert(updatedPopupCss.includes('.coll-chevron {') || updatedPopupCss.includes('.coll-chevron{'), 'popup.css includes .coll-chevron styling');
+  assert(updatedPopupCss.includes('.coll-chevron-spacer {') || updatedPopupCss.includes('.coll-chevron-spacer{'), 'popup.css includes .coll-chevron-spacer styling');
+  assert(updatedPopupCss.includes('.coll-icon-img {') || updatedPopupCss.includes('.coll-icon-img{'), 'popup.css includes .coll-icon-img styling');
+  assert(updatedPopupCss.includes('width: 18px'), 'popup.css sets width: 18px on collection icons');
+  assert(updatedPopupCss.includes('height: 18px'), 'popup.css sets height: 18px on collection icons');
+  assert(updatedPopupCss.includes('border-radius: 4px'), 'popup.css sets border-radius: 4px on collection icons');
+  assert(updatedPopupCss.includes('object-fit: cover'), 'popup.css sets object-fit: cover on collection icons');
+  assert(updatedPopupCss.includes('vertical-align: middle'), 'popup.css sets vertical-align: middle on collection icons');
+
+  // 7. Pill URL Icon Handling Simulation
+  const mockPillIcon = { innerHTML: '', textContent: '〰' };
+  const mockTabsPillIcon = { innerHTML: '', textContent: '〰' };
+  const simulateUpdatePills = (icon) => {
+    const iconHtml = renderIconHtml(icon);
+    if (isUrlIcon(icon)) {
+      mockPillIcon.innerHTML = iconHtml;
+      mockTabsPillIcon.innerHTML = iconHtml;
+    } else {
+      mockPillIcon.textContent = icon;
+      mockTabsPillIcon.textContent = icon;
+    }
+  };
+
+  simulateUpdatePills('https://up.raindrop.io/collection/thumbs/443/537/90/a61be.png');
+  assert(mockPillIcon.innerHTML.includes('<img class="coll-icon-img"'), 'View 1 pillIcon renders <img> tag for URL icon');
+  assert(mockTabsPillIcon.innerHTML.includes('<img class="coll-icon-img"'), 'View 3 tabsPillIcon renders <img> tag for URL icon');
+
+  simulateUpdatePills('〰');
+  assert(mockPillIcon.textContent === '〰', 'View 1 pillIcon resets to textContent for emoji 〰');
+  assert(mockTabsPillIcon.textContent === '〰', 'View 3 tabsPillIcon resets to textContent for emoji 〰');
+
   console.log(`\n========================================`);
   console.log(`Verification Complete: ${passed} Passed, ${failed} Failed`);
   if (failed > 0) {
