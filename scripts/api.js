@@ -304,11 +304,12 @@ const RaindropAPI = {
       }
     ];
 
-    // Group child collections by parent ID
+    // Group child collections by parent ID (normalizing numeric/string IDs)
     const childrenByParent = new Map();
     for (const child of childItems) {
-      const parentId = child.parent?.$id;
-      if (parentId !== undefined && parentId !== null) {
+      const rawPid = child.parent?.$id;
+      if (rawPid !== undefined && rawPid !== null) {
+        const parentId = !isNaN(Number(rawPid)) ? Number(rawPid) : rawPid;
         if (!childrenByParent.has(parentId)) {
           childrenByParent.set(parentId, []);
         }
@@ -320,28 +321,36 @@ const RaindropAPI = {
 
     // Recursive helper to traverse hierarchy
     function addCollection(coll, level = 0, parentId = null) {
-      if (!coll || coll._id === undefined || visited.has(coll._id)) return;
-      visited.add(coll._id);
+      if (!coll || coll._id === undefined) return;
+      const lookupId = !isNaN(Number(coll._id)) ? Number(coll._id) : coll._id;
+      if (visited.has(lookupId)) return;
+      visited.add(lookupId);
 
       let icon = '📁';
       if (coll.cover && Array.isArray(coll.cover) && coll.cover[0]) {
         icon = coll.cover[0];
       } else if (typeof coll.cover === 'string' && coll.cover) {
         icon = coll.cover;
+      } else if (coll.icon) {
+        icon = coll.icon;
       }
 
-      const children = childrenByParent.get(coll._id) || [];
+      const children = childrenByParent.get(lookupId) || [];
       const hasChildren = children.length > 0;
 
+      const normParentId = (parentId !== null && parentId !== undefined && !isNaN(Number(parentId)))
+        ? Number(parentId)
+        : parentId;
+
       result.push({
-        id: coll._id,
+        id: lookupId,
         title: coll.title || 'Untitled Collection',
         icon: icon,
         level: level,
         count: coll.count || 0,
         color: coll.color || null,
         shared: Boolean(coll.collaborators || (coll.access && coll.access.level > 1) || coll.public),
-        parentId: parentId,
+        parentId: normParentId,
         hasChildren: hasChildren
       });
 
@@ -349,7 +358,7 @@ const RaindropAPI = {
         // Sort children alphabetically
         const sortedChildren = [...children].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
         for (const child of sortedChildren) {
-          addCollection(child, level + 1, coll._id);
+          addCollection(child, level + 1, lookupId);
         }
       }
     }
@@ -368,7 +377,8 @@ const RaindropAPI = {
 
     // Include any orphaned child collections at root level so they are not lost
     for (const child of childItems) {
-      if (!visited.has(child._id)) {
+      const childLookupId = !isNaN(Number(child._id)) ? Number(child._id) : child._id;
+      if (!visited.has(childLookupId)) {
         addCollection(child, 0, null);
       }
     }

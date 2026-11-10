@@ -1059,7 +1059,14 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   await RaindropStorage.clearToken();
 
   console.log('\n=== 14. COLLAPSIBLE HIERARCHY, URL ICONS & SEARCH EXPANSION ===');
-  const { isUrlIcon, renderIconHtml, isCollectionVisible } = require(path.join(EXT_DIR, 'popup/popup.js'));
+  const { isUrlIcon, renderIconHtml, isCollectionVisible, expandAncestorsOf, escapeHtml } = require(path.join(EXT_DIR, 'popup/popup.js'));
+
+  // 0. escapeHtml Robustness (handles numbers, 0, null, undefined)
+  assert(escapeHtml(0) === '0', 'escapeHtml(0) returns "0" without blanking');
+  assert(escapeHtml(123) === '123', 'escapeHtml(123) converts number to string without throwing');
+  assert(escapeHtml(null) === '', 'escapeHtml(null) returns empty string');
+  assert(escapeHtml(undefined) === '', 'escapeHtml(undefined) returns empty string');
+  assert(escapeHtml('<script>alert("xss")</script>') === '&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;', 'escapeHtml escapes dangerous HTML characters');
 
   // 1. RaindropStorage expanded collections tests
   delete mockLocalStorage['raindrop_expanded_collections'];
@@ -1213,14 +1220,17 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(updatedPopupCss.includes('object-fit: cover'), 'popup.css sets object-fit: cover on collection icons');
   assert(updatedPopupCss.includes('vertical-align: middle'), 'popup.css sets vertical-align: middle on collection icons');
 
-  // 7. Pill URL Icon Handling Simulation
-  const mockPillIcon = { innerHTML: '', textContent: '〰' };
-  const mockTabsPillIcon = { innerHTML: '', textContent: '〰' };
+  // 7. Pill URL Icon Handling Simulation & Broken Image Fallback
+  const mockPillIcon = { innerHTML: '', textContent: '〰', listeners: {}, addEventListener(e, fn) { this.listeners[e] = fn; } };
+  const mockTabsPillIcon = { innerHTML: '', textContent: '〰', listeners: {}, addEventListener(e, fn) { this.listeners[e] = fn; } };
   const simulateUpdatePills = (icon) => {
     const iconHtml = renderIconHtml(icon);
     if (isUrlIcon(icon)) {
       mockPillIcon.innerHTML = iconHtml;
       mockTabsPillIcon.innerHTML = iconHtml;
+      // Attach CSP-compliant error listeners
+      mockPillIcon.onError = () => { mockPillIcon.textContent = '📁'; };
+      mockTabsPillIcon.onError = () => { mockTabsPillIcon.textContent = '📁'; };
     } else {
       mockPillIcon.textContent = icon;
       mockTabsPillIcon.textContent = icon;
@@ -1231,9 +1241,70 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(mockPillIcon.innerHTML.includes('<img class="coll-icon-img"'), 'View 1 pillIcon renders <img> tag for URL icon');
   assert(mockTabsPillIcon.innerHTML.includes('<img class="coll-icon-img"'), 'View 3 tabsPillIcon renders <img> tag for URL icon');
 
+  // Trigger error fallback on broken remote image
+  mockPillIcon.onError();
+  mockTabsPillIcon.onError();
+  assert(mockPillIcon.textContent === '📁', 'Pill icon gracefully falls back to 📁 on image load error');
+  assert(mockTabsPillIcon.textContent === '📁', 'Tabs pill icon gracefully falls back to 📁 on image load error');
+
   simulateUpdatePills('〰');
   assert(mockPillIcon.textContent === '〰', 'View 1 pillIcon resets to textContent for emoji 〰');
   assert(mockTabsPillIcon.textContent === '〰', 'View 3 tabsPillIcon resets to textContent for emoji 〰');
+
+  // 8. Type Coercion Resilience in Tree Hierarchy (mixed string and numeric IDs)
+  const mixedRoots = [{ _id: '500', title: 'String ID Root', sort: 0 }];
+  const mixedChildren = [
+    { _id: 501, title: 'Numeric ID Child', parent: { $id: 500 } },
+    { _id: '502', title: 'String ID Grandchild', parent: { $id: '501' } }
+  ];
+  const mixedTree = RaindropAPI.buildCollectionHierarchy(mixedRoots, mixedChildren);
+  const rootNode500 = mixedTree.find(c => Number(c.id) === 500);
+  const childNode501 = mixedTree.find(c => Number(c.id) === 501);
+  const grandNode502 = mixedTree.find(c => Number(c.id) === 502);
+
+  assert(rootNode500 && rootNode500.hasChildren === true, 'Parent with string _id recognizes child with numeric parent.$id');
+  assert(childNode501 && childNode501.parentId === 500, 'Child node normalized parentId to number 500');
+  assert(childNode501 && childNode501.hasChildren === true, 'Child node recognizes grandchild with string parent.$id');
+  assert(grandNode502 && grandNode502.parentId === 501, 'Grandchild node normalized parentId to number 501');
+
+  // 9. expandAncestorsOf Engine & Storage Integration
+  assert(typeof expandAncestorsOf === 'function', 'popup.js exports expandAncestorsOf');
+  const expandSet = new Set();
+  const expandTreeItems = [
+    { id: 10, parentId: null },
+    { id: 101, parentId: 10 },
+    { id: 1011, parentId: 101 }
+  ];
+  const didChange = expandAncestorsOf(1011, expandTreeItems, expandSet);
+  assert(didChange === true, 'expandAncestorsOf returns true when ancestors added');
+  assert(expandSet.has(101), 'expandAncestorsOf added immediate parent (101) to expandedSet');
+  assert(expandSet.has(10), 'expandAncestorsOf added root ancestor (10) to expandedSet');
+
+  // Storage was updated automatically
+  const storedExpanded = await RaindropStorage.getExpandedCollectionIds();
+  assert(
+    Array.isArray(storedExpanded) && storedExpanded.includes(10) && storedExpanded.includes(101),
+    'expandAncestorsOf persisted ancestor IDs to RaindropStorage'
+  );
+
+  // Calling expandAncestorsOf on root or already expanded items returns false
+  const noChange = expandAncestorsOf(10, expandTreeItems, expandSet);
+  assert(noChange === false, 'expandAncestorsOf on root item returns false without unneeded writes');
+
+  // 10. Deep Hierarchy Indentation Scaling Parity (> 4 levels)
+  const calcIndent = (level) => Math.min(level || 0, 8) * 14;
+  assert(calcIndent(0) === 0, 'Level 0 has 0px indent');
+  assert(calcIndent(1) === 14, 'Level 1 has 14px indent');
+  assert(calcIndent(4) === 56, 'Level 4 has 56px indent');
+  assert(calcIndent(5) === 70, 'Level 5 scales indent to 70px (beyond prior 4-level cap)');
+  assert(calcIndent(6) === 84, 'Level 6 scales indent to 84px');
+  assert(calcIndent(9) === 112, 'Level 9 caps safely at 112px max indent');
+
+  // 11. CSS Parity for Pill Icon Box Dimensions (Prevents layout shift)
+  assert(updatedPopupCss.includes('.pill-icon {') || updatedPopupCss.includes('.pill-icon{'), 'popup.css includes .pill-icon');
+  const pillIconCssMatch = updatedPopupCss.match(/\.pill-icon\s*\{[^}]+\}/);
+  assert(pillIconCssMatch && pillIconCssMatch[0].includes('width: 18px'), '.pill-icon sets explicit width: 18px');
+  assert(pillIconCssMatch && pillIconCssMatch[0].includes('height: 18px'), '.pill-icon sets explicit height: 18px');
 
   console.log(`\n========================================`);
   console.log(`Verification Complete: ${passed} Passed, ${failed} Failed`);

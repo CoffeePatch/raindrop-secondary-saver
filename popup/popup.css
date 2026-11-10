@@ -488,6 +488,8 @@ body {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  width: 18px;
+  height: 18px;
 }
 .pill-title {
   white-space: nowrap;

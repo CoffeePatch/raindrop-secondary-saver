@@ -3,7 +3,8 @@
  */
 
 function escapeHtml(str) {
-  return (str || '')
+  if (str === null || str === undefined) return '';
+  return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -20,6 +21,7 @@ function isUrlIcon(icon) {
     trimmed.startsWith('http://') ||
     trimmed.startsWith('https://') ||
     trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:') ||
     trimmed.startsWith('/')
   );
 }
@@ -43,16 +45,42 @@ function isCollectionVisible(coll, expandedSet, collMap) {
   let currentParentId = coll.parentId;
   const visited = new Set();
   while (currentParentId !== null && currentParentId !== undefined) {
-    if (visited.has(currentParentId)) break;
-    visited.add(currentParentId);
-    if (!expandedSet || !expandedSet.has(Number(currentParentId))) {
+    const pNum = Number(currentParentId);
+    if (visited.has(pNum)) break;
+    visited.add(pNum);
+    if (!expandedSet || !expandedSet.has(pNum)) {
       return false;
     }
-    const parent = collMap ? collMap.get(Number(currentParentId)) : null;
+    const parent = collMap ? collMap.get(pNum) : null;
     if (!parent) break;
     currentParentId = parent.parentId;
   }
   return true;
+}
+
+/**
+ * Recursively expands all ancestor folders of a collection so it is visible in the tree
+ */
+function expandAncestorsOf(collId, collList, expandedSet) {
+  if (!collId || !Array.isArray(collList) || !expandedSet) return false;
+  const map = new Map(collList.map(c => [Number(c.id), c]));
+  let current = map.get(Number(collId));
+  let changed = false;
+  const visited = new Set();
+  while (current && current.parentId !== null && current.parentId !== undefined) {
+    const pId = Number(current.parentId);
+    if (visited.has(pId)) break;
+    visited.add(pId);
+    if (!expandedSet.has(pId)) {
+      expandedSet.add(pId);
+      changed = true;
+    }
+    current = map.get(pId);
+  }
+  if (changed && typeof RaindropStorage !== 'undefined' && RaindropStorage.setExpandedCollectionIds) {
+    RaindropStorage.setExpandedCollectionIds(Array.from(expandedSet));
+  }
+  return changed;
 }
 
 /**
@@ -693,6 +721,9 @@ if (typeof document !== 'undefined') {
       viewCollection.classList.remove('hidden');
       viewCollection.classList.add('active');
       collectionSearchInput.value = '';
+      if (selectedCollectionId && selectedCollectionId !== 0 && selectedCollectionId !== -99) {
+        expandAncestorsOf(selectedCollectionId, userCollections, expandedCollectionIds);
+      }
       renderCollectionsList('');
       setTimeout(() => collectionSearchInput.focus(), 50);
     } else if (targetView === 'tabs') {
@@ -723,6 +754,12 @@ if (typeof document !== 'undefined') {
     if (pillIcon) {
       if (isUrlIcon(selectedCollectionIcon)) {
         pillIcon.innerHTML = iconHtml;
+        const img = pillIcon.querySelector('img');
+        if (img) {
+          img.addEventListener('error', () => {
+            pillIcon.textContent = '📁';
+          });
+        }
       } else {
         pillIcon.textContent = selectedCollectionIcon;
       }
@@ -732,6 +769,12 @@ if (typeof document !== 'undefined') {
     if (tabsPillIcon) {
       if (isUrlIcon(selectedCollectionIcon)) {
         tabsPillIcon.innerHTML = iconHtml;
+        const img = tabsPillIcon.querySelector('img');
+        if (img) {
+          img.addEventListener('error', () => {
+            tabsPillIcon.textContent = '📁';
+          });
+        }
       } else {
         tabsPillIcon.textContent = selectedCollectionIcon;
       }
@@ -933,8 +976,8 @@ if (typeof document !== 'undefined') {
         itemEl.classList.add('active-selected');
       }
 
-      // Hierarchy Indent
-      const indentPx = Math.min(coll.level || 0, 4) * 14;
+      // Hierarchy Indent (supports deep nesting up to 8 levels)
+      const indentPx = Math.min(coll.level || 0, 8) * 14;
       if (indentPx > 0) {
         itemEl.style.paddingLeft = `${10 + indentPx}px`;
       }
@@ -951,14 +994,24 @@ if (typeof document !== 'undefined') {
 
       const iconHtml = renderIconHtml(iconDisplay);
 
+      itemEl.setAttribute('tabindex', '0');
+      itemEl.setAttribute('role', 'button');
       itemEl.innerHTML = `
         <div class="coll-left">
           ${chevronHtml}
           <span class="coll-icon">${iconHtml}</span>
-          <span class="coll-title">${escapeHtml(coll.title)}</span>
+          <span class="coll-title">${escapeHtml(coll.title || 'Untitled Collection')}</span>
         </div>
         <span class="coll-count">${coll.count || 0}</span>
       `;
+
+      // Fallback on broken image cover without inline event handler (MV3 CSP safe)
+      const collImg = itemEl.querySelector('.coll-icon-img');
+      if (collImg) {
+        collImg.addEventListener('error', () => {
+          collImg.replaceWith(document.createTextNode('📁'));
+        });
+      }
 
       const chevronEl = itemEl.querySelector('.coll-chevron');
       if (chevronEl) {
@@ -978,6 +1031,12 @@ if (typeof document !== 'undefined') {
 
       itemEl.addEventListener('click', () => {
         selectCollectionAndReturn(coll.id, coll.title, iconDisplay);
+      });
+      itemEl.addEventListener('keydown', (e) => {
+        if (e.target === itemEl && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          selectCollectionAndReturn(coll.id, coll.title, iconDisplay);
+        }
       });
 
       userCollectionsList.appendChild(itemEl);
@@ -1693,6 +1752,7 @@ if (typeof module !== 'undefined' && module.exports) {
     applyShiftClickRangeSelection,
     isUrlIcon,
     renderIconHtml,
-    isCollectionVisible
+    isCollectionVisible,
+    expandAncestorsOf
   };
 }
