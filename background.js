@@ -94,6 +94,22 @@ function clearTabBadge(tabId) {
 }
 
 /**
+ * Checks if a URL is in the set of saved links, allowing for harmless
+ * trailing-slash representation differences without broad normalization.
+ */
+function isUrlInSavedSet(url, savedSet) {
+  if (!url || !savedSet || savedSet.size === 0) return false;
+  const trimmed = url.trim();
+  if (savedSet.has(trimmed)) return true;
+  if (trimmed.endsWith('/')) {
+    if (savedSet.has(trimmed.slice(0, -1))) return true;
+  } else {
+    if (savedSet.has(trimmed + '/')) return true;
+  }
+  return false;
+}
+
+/**
  * Handle batch tab saving in the background service worker
  * Executes batch save via POST /raindrops, guarantees tab closing only on success
  */
@@ -111,40 +127,72 @@ async function handleSaveTabsBatch({ items = [], closeTabIds = [] } = {}) {
   }
 
   if (!items || !Array.isArray(items) || items.length === 0) {
-    return { success: true, count: 0, items: [] };
+    return { success: true, count: 0, totalRequested: 0, items: [], closedTabIds: [] };
   }
 
   // 1. Execute batch save via official batch endpoint POST /raindrops
   const result = await apiObj.createRaindropsBatch(token, items);
 
-  const tabIdsToClose = Array.isArray(closeTabIds)
-    ? closeTabIds.map(Number).filter(id => !isNaN(id) && id > 0)
-    : [];
+  const savedLinks = new Set(
+    (result?.items || [])
+      .map(it => (it?.link || it?.url || '').trim())
+      .filter(Boolean)
+  );
 
-  // 2. Close tabs ONLY AFTER successful batch save to prevent data loss
-  if (tabIdsToClose.length > 0 && typeof chrome !== 'undefined' && chrome.tabs?.remove) {
-    try {
-      await chrome.tabs.remove(tabIdsToClose);
-    } catch (closeErr) {
-      console.warn('[Background] Failed to close tabs after batch save:', closeErr);
+  // Map each tab to its clean URL
+  const tabUrlMap = new Map();
+  for (const it of items) {
+    const rawUrl = (it.link || it.url || '').trim();
+    if (it.tabId && rawUrl) {
+      tabUrlMap.set(Number(it.tabId), rawUrl);
     }
   }
 
-  // 3. Update toolbar icon badge for all newly saved URLs on remaining open tabs
-  try {
-    const savedUrls = new Set(items.map(it => it.link || it.url).filter(Boolean));
-    if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
-      const openTabs = await chrome.tabs.query({});
-      for (const tab of openTabs) {
-        if (tab?.id && tab.url && savedUrls.has(tab.url)) {
-          setTabBadge(tab.id);
-        }
+  // 2. Close ONLY tabs whose URL is confirmed in savedLinks to prevent data loss.
+  // If a tab's save status is uncertain, DO NOT CLOSE IT.
+  const requestedCloseIds = Array.isArray(closeTabIds)
+    ? closeTabIds.map(Number).filter(id => !isNaN(id) && id > 0)
+    : [];
+
+  const eligibleCloseTabIds = requestedCloseIds.filter(id => {
+    const url = tabUrlMap.get(id);
+    return url && isUrlInSavedSet(url, savedLinks);
+  });
+
+  const actuallyClosedTabIds = [];
+  if (eligibleCloseTabIds.length > 0 && typeof chrome !== 'undefined' && chrome.tabs?.remove) {
+    try {
+      await chrome.tabs.remove(eligibleCloseTabIds);
+      actuallyClosedTabIds.push(...eligibleCloseTabIds);
+    } catch (closeErr) {
+      console.warn('[Background] Failed to close tabs batch, trying individually:', closeErr);
+      for (const id of eligibleCloseTabIds) {
+        try {
+          await chrome.tabs.remove(id);
+          actuallyClosedTabIds.push(id);
+        } catch (_) {}
       }
     }
-    const closedSet = new Set(tabIdsToClose);
-    for (const it of items) {
-      if (it.tabId && !closedSet.has(Number(it.tabId))) {
-        setTabBadge(Number(it.tabId));
+  }
+
+  // 3. Update toolbar icon badge ONLY for tabs positively confirmed saved by API on remaining open tabs (M-01)
+  try {
+    const closedSet = new Set(actuallyClosedTabIds);
+    if (savedLinks.size > 0) {
+      for (const it of items) {
+        const rawUrl = (it.link || it.url || '').trim();
+        const tabId = Number(it.tabId);
+        if (tabId && !closedSet.has(tabId) && isUrlInSavedSet(rawUrl, savedLinks)) {
+          setTabBadge(tabId);
+        }
+      }
+      if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+        const openTabs = await chrome.tabs.query({});
+        for (const tab of openTabs) {
+          if (tab?.id && tab.url && !closedSet.has(tab.id) && isUrlInSavedSet(tab.url, savedLinks)) {
+            setTabBadge(tab.id);
+          }
+        }
       }
     }
   } catch (badgeErr) {
@@ -166,10 +214,13 @@ async function handleSaveTabsBatch({ items = [], closeTabIds = [] } = {}) {
     console.warn('[Background] Failed to save recent tags after batch save:', tagErr);
   }
 
+  const savedCount = Array.isArray(result?.items) ? result.items.length : 0;
   return {
     success: true,
-    count: result?.items?.length || items.length,
-    items: result?.items || []
+    count: savedCount,
+    totalRequested: items.length,
+    items: result?.items || [],
+    closedTabIds: actuallyClosedTabIds
   };
 }
 
@@ -262,6 +313,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     isCheckableUrl,
+    isUrlInSavedSet,
     updateTabBadge,
     setTabBadge,
     clearTabBadge,

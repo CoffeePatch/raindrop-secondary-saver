@@ -541,6 +541,33 @@ class TagChipsComponent {
   }
 }
 
+/**
+ * Compares two URLs to determine whether they point to the same destination,
+ * allowing for harmless representation differences (e.g. trailing slash differences)
+ * without broad normalization that silently merges distinct destinations.
+ */
+function areUrlsEquivalent(urlA, urlB) {
+  if (!urlA || !urlB) return false;
+  if (urlA === urlB) return true;
+  try {
+    const a = new URL(urlA);
+    const b = new URL(urlB);
+    if (a.protocol.toLowerCase() !== b.protocol.toLowerCase()) return false;
+    if (a.hostname.toLowerCase() !== b.hostname.toLowerCase()) return false;
+    if (a.port !== b.port) return false;
+    if (a.search !== b.search) return false;
+    if (a.hash !== b.hash) return false;
+
+    const pathA = a.pathname.replace(/\/+$/, '');
+    const pathB = b.pathname.replace(/\/+$/, '');
+    return pathA === pathB;
+  } catch (_) {
+    const normA = urlA.trim().replace(/\/+$/, '');
+    const normB = urlB.trim().replace(/\/+$/, '');
+    return normA === normB;
+  }
+}
+
 if (typeof document !== 'undefined') {
   document.addEventListener('DOMContentLoaded', async () => {
   // ==========================================
@@ -639,6 +666,11 @@ if (typeof document !== 'undefined') {
   let currentUser = null;
   let currentTab = null;
   let existingBookmark = null; // item if URL is already saved
+  let originalLoadedBookmark = null; // cached original bookmark item for clean URL revert
+  let loadedBookmarkUrl = null; // original lookup URL
+  let canonicalBookmarkUrl = null; // canonical URL returned by Raindrop
+  let checkingBookmarkPromise = null; // In-flight checkBookmarkStatus promise (F-06)
+  const userEditedFields = new Set(); // Track fields modified by user (F-06)
   let isFavorite = false;
   let isReminder = false;
   let selectedCollectionId = 0;
@@ -658,6 +690,12 @@ if (typeof document !== 'undefined') {
   // ==========================================
   // Helper Utilities
   // ==========================================
+  function isUrlMatchingLoadedBookmark(inputUrl) {
+    if (!loadedBookmarkUrl && !canonicalBookmarkUrl) return false;
+    return areUrlsEquivalent(inputUrl, loadedBookmarkUrl) ||
+           areUrlsEquivalent(inputUrl, canonicalBookmarkUrl);
+  }
+
   function openUrl(url) {
     if (chrome?.tabs?.create) {
       chrome.tabs.create({ url });
@@ -694,9 +732,32 @@ if (typeof document !== 'undefined') {
     }
   }
 
-  // Monitor form input changes to update status to "Edit"
-  [bookmarkTitle, bookmarkExcerpt, bookmarkNote, bookmarkTagsInput, bookmarkUrl].forEach(el => {
-    el.addEventListener('input', markAsEdited);
+  // Monitor form input changes to update status to "Edit" and track user edits (F-02, F-06)
+  bookmarkTitle.addEventListener('input', () => { userEditedFields.add('title'); markAsEdited(); });
+  bookmarkExcerpt.addEventListener('input', () => { userEditedFields.add('excerpt'); markAsEdited(); });
+  bookmarkNote.addEventListener('input', () => { userEditedFields.add('note'); markAsEdited(); });
+  bookmarkTagsInput.addEventListener('input', () => { userEditedFields.add('tags'); markAsEdited(); });
+  bookmarkUrl.addEventListener('input', () => {
+    userEditedFields.add('url');
+    markAsEdited();
+    const currentVal = bookmarkUrl.value.trim();
+    if (isUrlMatchingLoadedBookmark(currentVal)) {
+      if (originalLoadedBookmark) {
+        existingBookmark = originalLoadedBookmark;
+        deleteBookmarkBtn.classList.remove('hidden');
+        if (headerStatusTitle.textContent === 'Edit' && !userEditedFields.has('title') && !userEditedFields.has('note')) {
+          headerStatusTitle.textContent = 'Saved';
+          saveBtnText.textContent = 'Saved ✓';
+        }
+      }
+    } else {
+      existingBookmark = null;
+      deleteBookmarkBtn.classList.add('hidden');
+      if (headerStatusTitle.textContent === 'Saved') {
+        headerStatusTitle.textContent = 'Edit';
+        saveBtnText.textContent = 'Save';
+      }
+    }
   });
 
   function switchView(targetView) {
@@ -738,7 +799,12 @@ if (typeof document !== 'undefined') {
     } else if (targetView === 'settings') {
       viewSettings.classList.remove('hidden');
       viewSettings.classList.add('active');
-      settingsTokenInput.value = currentToken || '';
+      settingsTokenInput.value = '';
+      if (currentToken) {
+        settingsTokenInput.placeholder = `Connected (••••${currentToken.slice(-4)})`;
+      } else {
+        settingsTokenInput.placeholder = 'Paste Personal Access Token...';
+      }
       setTimeout(() => settingsTokenInput.focus(), 50);
     } else {
       // main
@@ -812,11 +878,19 @@ if (typeof document !== 'undefined') {
           allTags = cached;
         }
       }
-      allTags = await RaindropAPI.getTags(currentToken);
+      const freshTags = await RaindropAPI.getTags(currentToken);
+      allTags = freshTags;
       await RaindropStorage.setCachedTags(allTags);
     } catch (e) {
       console.warn('Failed to load tags:', e);
-      if (allTags.length === 0) allTags = [];
+      if (allTags.length === 0) {
+        const cached = await RaindropStorage.getCachedTags();
+        if (Array.isArray(cached) && cached.length > 0) {
+          allTags = cached;
+        } else {
+          allTags = [];
+        }
+      }
     }
   }
 
@@ -835,7 +909,10 @@ if (typeof document !== 'undefined') {
     dropdown: tagsAutocompleteDropdown,
     dropdownList: tagsDropdownList,
     placeholder: 'Add tags...',
-    onChange: () => markAsEdited(),
+    onChange: () => {
+      userEditedFields.add('tags');
+      markAsEdited();
+    },
     getAllTags: () => allTags,
     getRecentTags: () => recentTags
   });
@@ -959,6 +1036,8 @@ if (typeof document !== 'undefined') {
       console.warn('Failed to load collections:', e);
       if (e.status === 401) {
         switchView('settings');
+      } else if (userCollections.length > 0) {
+        showBanner('Unable to refresh collections; showing cached data.', 'info', 4000);
       }
     } finally {
       isLoadingCollections = false;
@@ -1127,6 +1206,7 @@ if (typeof document !== 'undefined') {
 
   function selectCollectionAndReturn(id, title, icon) {
     userManuallySelectedCollection = true;
+    userEditedFields.add('collection');
     updateCollectionPills(id, title, icon);
     RaindropStorage.setLastCollectionId(id);
     switchView(previousView === 'tabs' ? 'tabs' : 'main');
@@ -1212,7 +1292,7 @@ if (typeof document !== 'undefined') {
 
     try {
       const tabs = await chrome.tabs.query({ currentWindow: true });
-      openTabsData = tabs.filter(t => t.url && !/^(chrome|brave|edge|about|devtools):/i.test(t.url));
+      openTabsData = tabs.filter(t => t.url && /^https?:\/\//i.test(t.url));
 
       renderOpenTabsList();
     } catch (e) {
@@ -1342,15 +1422,39 @@ if (typeof document !== 'undefined') {
     let saveSucceeded = false;
     try {
       // Offload to background service worker for reliable batch saving
-      await new Promise((resolve, reject) => {
+      const batchResult = await new Promise((resolve, reject) => {
         if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {
           // Fallback if background worker messaging not available
           RaindropAPI.createRaindropsBatch(currentToken, items)
-            .then(res => {
+            .then(async res => {
+              const savedItems = Array.isArray(res?.items) ? res.items : [];
+              const savedUrls = new Set(savedItems.map(it => (it?.link || it?.url || '').trim()).filter(Boolean));
+              const actuallyClosedTabIds = [];
               if (shouldClose && chrome?.tabs?.remove) {
-                chrome.tabs.remove(selectedIds).catch(() => {});
+                const confirmedTabIds = tabsToSave
+                  .filter(t => t.url && (savedUrls.has(t.url.trim()) || savedUrls.has(t.url.trim() + '/') || (t.url.trim().endsWith('/') && savedUrls.has(t.url.trim().slice(0, -1)))))
+                  .map(t => t.id);
+                if (confirmedTabIds.length > 0) {
+                  try {
+                    await chrome.tabs.remove(confirmedTabIds);
+                    actuallyClosedTabIds.push(...confirmedTabIds);
+                  } catch (err) {
+                    for (const id of confirmedTabIds) {
+                      try {
+                        await chrome.tabs.remove(id);
+                        actuallyClosedTabIds.push(id);
+                      } catch (_) {}
+                    }
+                  }
+                }
               }
-              resolve(res);
+              resolve({
+                success: true,
+                count: savedItems.length,
+                totalRequested: items.length,
+                items: savedItems,
+                closedTabIds: actuallyClosedTabIds
+              });
             })
             .catch(reject);
           return;
@@ -1366,7 +1470,7 @@ if (typeof document !== 'undefined') {
           } else if (res && res.success === false) {
             reject(new Error(res.error || 'Failed to save tabs batch'));
           } else {
-            resolve(res);
+            resolve(res || {});
           }
         });
       });
@@ -1376,13 +1480,28 @@ if (typeof document !== 'undefined') {
         await loadRecentTags();
       }
 
+      const savedCount = typeof batchResult?.count === 'number' ? batchResult.count : 0;
+      const totalRequested = countToSave;
+
+      if (savedCount === 0) {
+        showBanner('No tabs were saved. Please check collection and tab URLs.', 'warning', 5000);
+        saveTabsBtnText.textContent = `Save ${countToSave} tabs`;
+        saveSucceeded = false;
+        return;
+      }
+
       saveTabsBtnText.textContent = 'Saved!';
       saveSucceeded = true;
-      showBanner(`Saved ${countToSave} tabs to ${selectedCollectionTitle}!`, 'info', 4000);
+
+      if (savedCount === totalRequested) {
+        showBanner(`Saved ${savedCount} tabs to ${selectedCollectionTitle}!`, 'info', 4000);
+      } else {
+        showBanner(`Saved ${savedCount} of ${totalRequested} tabs to ${selectedCollectionTitle}.`, 'warning', 5000);
+      }
       tabsTagsComponent.clear();
 
-      if (shouldClose) {
-        openTabsData = openTabsData.filter(t => !selectedIds.includes(t.id));
+      if (shouldClose && Array.isArray(batchResult?.closedTabIds) && batchResult.closedTabIds.length > 0) {
+        openTabsData = openTabsData.filter(t => !batchResult.closedTabIds.includes(t.id));
         renderOpenTabsList();
       }
 
@@ -1462,58 +1581,78 @@ if (typeof document !== 'undefined') {
   }
 
   async function checkBookmarkStatus(url) {
-    try {
-      const item = await RaindropAPI.checkUrl(currentToken, url);
-      if (item) {
-        existingBookmark = item;
-        headerStatusTitle.textContent = 'Saved';
-        saveBtnText.textContent = 'Saved ✓';
-        deleteBookmarkBtn.classList.remove('hidden');
-        updateToolbarBadge(true);
+    checkingBookmarkPromise = (async () => {
+      try {
+        loadedBookmarkUrl = url;
+        const item = await RaindropAPI.checkUrl(currentToken, url);
+        if (item) {
+          canonicalBookmarkUrl = (item.link || '').trim() || null;
+          originalLoadedBookmark = item;
 
-        if (item.title) bookmarkTitle.value = item.title;
-        if (item.excerpt) bookmarkExcerpt.value = item.excerpt;
-        if (item.note) bookmarkNote.value = item.note;
-        if (Array.isArray(item.tags) && item.tags.length > 0) {
-          bookmarkTagsComponent.setTags(item.tags);
-        } else {
-          bookmarkTagsComponent.clear();
-        }
-        if (item.important) {
-          setFavorite(true);
-        }
-        if (item.reminder?.date) {
-          isReminder = true;
-          reminderBellBtn.classList.add('active');
-        }
-        if (item.cover || (Array.isArray(item.media) && item.media[0]?.link)) {
-          const coverUrl = item.cover || item.media[0].link;
-          bookmarkThumbnail.src = coverUrl;
-          bookmarkThumbnail.classList.remove('hidden');
-          thumbFallback.classList.add('hidden');
-        }
-        if (item.collection?.$id !== undefined) {
-          const targetId = Number(item.collection.$id);
-          const matched = rawCollections.find(c => Number(c.id) === targetId);
-          if (matched) {
-            updateCollectionPills(matched.id, matched.title, matched.icon);
-          } else if (targetId === 0) {
-            updateCollectionPills(0, 'Unsorted', '〰');
-          } else if (targetId === -99) {
-            updateCollectionPills(-99, 'Trash', '🗑');
-          } else {
-            updateCollectionPills(targetId, 'Collection', '📁');
+          // If the URL in the input field has already been changed away by the user to a different destination, do not link to old bookmark
+          const currentInputUrl = bookmarkUrl.value.trim();
+          if (userEditedFields.has('url') && !isUrlMatchingLoadedBookmark(currentInputUrl)) {
+            existingBookmark = null;
+            return;
           }
+
+          existingBookmark = item;
+          headerStatusTitle.textContent = 'Saved';
+          saveBtnText.textContent = 'Saved ✓';
+          deleteBookmarkBtn.classList.remove('hidden');
+          updateToolbarBadge(true);
+
+          if (!userEditedFields.has('title') && item.title) bookmarkTitle.value = item.title;
+          if (!userEditedFields.has('excerpt') && item.excerpt) bookmarkExcerpt.value = item.excerpt;
+          if (!userEditedFields.has('note') && item.note) bookmarkNote.value = item.note;
+          if (!userEditedFields.has('tags')) {
+            if (Array.isArray(item.tags) && item.tags.length > 0) {
+              bookmarkTagsComponent.setTags(item.tags);
+            } else {
+              bookmarkTagsComponent.clear();
+            }
+          }
+          if (!userEditedFields.has('favorite') && item.important) {
+            setFavorite(true);
+          }
+          if (item.reminder?.date) {
+            isReminder = true;
+            reminderBellBtn.classList.add('active');
+          }
+          if (item.cover || (Array.isArray(item.media) && item.media[0]?.link)) {
+            const coverUrl = item.cover || item.media[0].link;
+            bookmarkThumbnail.src = coverUrl;
+            bookmarkThumbnail.classList.remove('hidden');
+            thumbFallback.classList.add('hidden');
+          }
+          if (!userEditedFields.has('collection') && item.collection?.$id !== undefined) {
+            const targetId = Number(item.collection.$id);
+            const matched = rawCollections.find(c => Number(c.id) === targetId);
+            if (matched) {
+              updateCollectionPills(matched.id, matched.title, matched.icon);
+            } else if (targetId === 0) {
+              updateCollectionPills(0, 'Unsorted', '〰');
+            } else if (targetId === -99) {
+              updateCollectionPills(-99, 'Trash', '🗑');
+            } else {
+              updateCollectionPills(targetId, 'Collection', '📁');
+            }
+          }
+        } else {
+          existingBookmark = null;
+          originalLoadedBookmark = null;
+          canonicalBookmarkUrl = null;
+          loadedBookmarkUrl = url;
+          headerStatusTitle.textContent = 'Edit';
+          saveBtnText.textContent = 'Save';
+          deleteBookmarkBtn.classList.add('hidden');
+          updateToolbarBadge(false);
         }
-      } else {
-        headerStatusTitle.textContent = 'Edit';
-        saveBtnText.textContent = 'Save';
-        deleteBookmarkBtn.classList.add('hidden');
-        updateToolbarBadge(false);
+      } catch (e) {
+        // Non-fatal
       }
-    } catch (e) {
-      // Non-fatal
-    }
+    })();
+    return checkingBookmarkPromise;
   }
 
   function setFavorite(active) {
@@ -1563,6 +1702,9 @@ if (typeof document !== 'undefined') {
     try {
       await RaindropAPI.deleteRaindrop(currentToken, existingBookmark._id);
       existingBookmark = null;
+      originalLoadedBookmark = null;
+      loadedBookmarkUrl = null;
+      canonicalBookmarkUrl = null;
       headerStatusTitle.textContent = 'Edit';
       saveBtnText.textContent = 'Save';
       deleteBookmarkBtn.classList.add('hidden');
@@ -1590,6 +1732,13 @@ if (typeof document !== 'undefined') {
       return;
     }
 
+    // Await any in-flight existence check to avoid race condition (F-06)
+    if (checkingBookmarkPromise) {
+      try {
+        await checkingBookmarkPromise;
+      } catch (_) {}
+    }
+
     let url = bookmarkUrl.value.trim();
     if (url && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) {
       url = 'https://' + url;
@@ -1599,6 +1748,11 @@ if (typeof document !== 'undefined') {
     if (!url || !/^https?:\/\//i.test(url)) {
       showBanner('Please enter a valid web URL.', 'warning');
       return;
+    }
+
+    // F-02 / H-01: Decouple loaded bookmark if URL field was changed away to a different destination
+    if (existingBookmark && !isUrlMatchingLoadedBookmark(url)) {
+      existingBookmark = null;
     }
 
     const title = bookmarkTitle.value.trim();
@@ -1634,6 +1788,9 @@ if (typeof document !== 'undefined') {
       }
 
       existingBookmark = savedItem;
+      originalLoadedBookmark = savedItem;
+      loadedBookmarkUrl = url;
+      canonicalBookmarkUrl = (savedItem?.link || url).trim();
       await RaindropStorage.setLastCollectionId(selectedCollectionId);
 
       if (tags.length > 0) {
@@ -1700,7 +1857,16 @@ if (typeof document !== 'undefined') {
     await RaindropStorage.clearToken();
     currentToken = null;
     currentUser = null;
+    rawCollections = [];
+    userCollections = [];
+    allTags = [];
+    expandedCollectionIds = new Set();
+    existingBookmark = null;
+    originalLoadedBookmark = null;
+    loadedBookmarkUrl = null;
+    canonicalBookmarkUrl = null;
     updateToolbarBadge(false);
+    updateUserProfileUI({ fullName: 'Raindrop Account B', email: '' });
     showBanner('Disconnected from Account B.', 'info', 3000);
     switchView('settings');
   });
@@ -1744,8 +1910,14 @@ if (typeof document !== 'undefined') {
     e.preventDefault();
     hideBanner();
 
-    const tokenVal = settingsTokenInput.value.trim();
+    const rawInput = settingsTokenInput.value;
+    const tokenVal = RaindropStorage.sanitizeToken(rawInput);
     if (!tokenVal) {
+      if (currentToken) {
+        showBanner('Token unchanged.', 'info', 2000);
+        switchView('main');
+        return;
+      }
       showBanner('Please paste your Personal Access Token.', 'warning');
       return;
     }
@@ -1756,9 +1928,28 @@ if (typeof document !== 'undefined') {
 
     try {
       const user = await RaindropAPI.verifyToken(tokenVal);
+
+      // F-07: If replacing token or switching user account, purge previous account caches first
+      if (currentToken && (currentToken !== tokenVal || (currentUser && currentUser._id !== user._id))) {
+        await RaindropStorage.clearAccountData();
+        rawCollections = [];
+        userCollections = [];
+        allTags = [];
+        expandedCollectionIds = new Set();
+        existingBookmark = null;
+        originalLoadedBookmark = null;
+        loadedBookmarkUrl = null;
+        canonicalBookmarkUrl = null;
+      }
+
       currentToken = tokenVal;
+      currentUser = user;
       await RaindropStorage.setToken(tokenVal);
       await RaindropStorage.setUser(user);
+
+      // F-14: Mask token in UI
+      settingsTokenInput.value = '';
+      settingsTokenInput.placeholder = `Connected (••••${tokenVal.slice(-4)})`;
 
       updateUserProfileUI(user);
       showBanner(`Connected as ${user.fullName || user.email || 'Account B'}!`, 'info', 3000);
@@ -1866,6 +2057,7 @@ if (typeof module !== 'undefined' && module.exports) {
     isUrlIcon,
     renderIconHtml,
     isCollectionVisible,
-    expandAncestorsOf
+    expandAncestorsOf,
+    areUrlsEquivalent
   };
 }

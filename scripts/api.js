@@ -5,39 +5,82 @@
 const API_BASE = 'https://api.raindrop.io/rest/v1';
 
 const RaindropStorage = {
+  /**
+   * Sanitizes token string by trimming whitespace, quotes, and leading 'Bearer '
+   */
+  sanitizeToken(token) {
+    if (!token || typeof token !== 'string') return '';
+    let clean = token.trim();
+    clean = clean.replace(/^["']|["']$/g, '').trim();
+    if (clean.toLowerCase().startsWith('bearer ')) {
+      clean = clean.slice(7).trim();
+    }
+    return clean;
+  },
+
   async getToken() {
     if (typeof chrome === 'undefined' || !chrome.storage) return null;
-    try {
-      const data = await chrome.storage.sync.get(['raindrop_token']);
-      if (data && data.raindrop_token) {
-        return data.raindrop_token.trim();
-      }
-    } catch (e) {
-      console.warn('Sync storage read failed, falling back to local:', e);
-    }
+    let localToken = null;
     try {
       const localData = await chrome.storage.local.get(['raindrop_token']);
-      return localData?.raindrop_token ? localData.raindrop_token.trim() : null;
+      if (localData?.raindrop_token) {
+        localToken = this.sanitizeToken(localData.raindrop_token);
+      }
     } catch (e) {
-      return null;
+      console.warn('Local storage read failed:', e);
     }
+
+    if (localToken) {
+      if (chrome.storage.sync) {
+        chrome.storage.sync.remove(['raindrop_token']).catch(() => {});
+      }
+      return localToken;
+    }
+
+    // Migration fallback: check sync storage if local is empty
+    let syncToken = null;
+    try {
+      if (chrome.storage.sync) {
+        const syncData = await chrome.storage.sync.get(['raindrop_token']);
+        if (syncData?.raindrop_token) {
+          syncToken = this.sanitizeToken(syncData.raindrop_token);
+        }
+      }
+    } catch (e) {
+      console.warn('Sync storage read failed:', e);
+    }
+
+    if (syncToken) {
+      // Migrate syncToken into local storage and clean up sync storage
+      try {
+        await chrome.storage.local.set({ raindrop_token: syncToken });
+        if (chrome.storage.sync) {
+          await chrome.storage.sync.remove(['raindrop_token']);
+        }
+      } catch (e) {
+        console.warn('Migration from sync to local storage had warning:', e);
+      }
+      return syncToken;
+    }
+
+    return null;
   },
 
   async setToken(token) {
-    let cleanToken = (token || '').trim();
-    cleanToken = cleanToken.replace(/^["']|["']$/g, '').trim();
-    if (cleanToken.toLowerCase().startsWith('bearer ')) {
-      cleanToken = cleanToken.slice(7).trim();
+    const cleanToken = this.sanitizeToken(token);
+    if (!cleanToken) {
+      throw new Error('Token cannot be empty.');
     }
-
     if (typeof chrome === 'undefined' || !chrome.storage) return;
+
+    // Save exclusively to chrome.storage.local
+    await chrome.storage.local.set({ raindrop_token: cleanToken });
+
+    // Ensure sync storage is cleared of any legacy token copy
     try {
-      await chrome.storage.sync.set({ raindrop_token: cleanToken });
-    } catch (e) {
-      console.warn('Sync storage write failed, falling back to local:', e);
-    }
-    try {
-      await chrome.storage.local.set({ raindrop_token: cleanToken });
+      if (chrome.storage.sync) {
+        await chrome.storage.sync.remove(['raindrop_token']);
+      }
     } catch (e) {
       // ignore
     }
@@ -54,16 +97,27 @@ const RaindropStorage = {
       'raindrop_cached_collections',
       'raindrop_cached_tags'
     ];
+    await chrome.storage.local.remove(keys);
     try {
-      await chrome.storage.sync.remove(keys);
+      if (chrome.storage.sync) {
+        await chrome.storage.sync.remove(keys);
+      }
     } catch (e) {
       // ignore
     }
-    try {
-      await chrome.storage.local.remove(keys);
-    } catch (e) {
-      // ignore
-    }
+  },
+
+  async clearAccountData() {
+    if (typeof chrome === 'undefined' || !chrome.storage) return;
+    const accountKeys = [
+      'raindrop_user',
+      'raindrop_last_collection',
+      'raindrop_expanded_collections',
+      'raindrop_recent_tags',
+      'raindrop_cached_collections',
+      'raindrop_cached_tags'
+    ];
+    await chrome.storage.local.remove(accountKeys);
   },
 
   async getLastCollectionId() {
@@ -266,7 +320,7 @@ const RaindropAPI = {
 
     let response;
     try {
-      response = await fetch(url, { ...options, headers });
+      response = await fetch(url, { credentials: 'omit', ...options, headers });
     } catch (netErr) {
       throw new RaindropAPIError(`Network error: Unable to reach Raindrop.io (${netErr.message})`, 0);
     }
@@ -286,7 +340,7 @@ const RaindropAPI = {
       throw new RaindropAPIError(errorMsg, response.status, data);
     }
 
-    if (data && data.result === false) {
+    if (data && data.result === false && !options.allowResultFalse) {
       throw new RaindropAPIError(data.errorMessage || 'Raindrop request failed.', response.status, data);
     }
 
@@ -321,14 +375,8 @@ const RaindropAPI = {
   async getCollections(token) {
     // Parallel fetch of root collections and child collections
     const [rootRes, childrenRes] = await Promise.all([
-      this.request('/collections', token).catch(err => {
-        console.warn('Failed to fetch root collections:', err);
-        return { items: [] };
-      }),
-      this.request('/collections/childrens', token).catch(err => {
-        console.warn('Failed to fetch child collections:', err);
-        return { items: [] };
-      })
+      this.request('/collections', token),
+      this.request('/collections/childrens', token)
     ]);
 
     const rootItems = rootRes?.items || [];
@@ -447,22 +495,17 @@ const RaindropAPI = {
    * Calls GET /tags/0 to get all user tags
    */
   async getTags(token) {
-    try {
-      const data = await this.request('/tags/0', token);
-      const items = data?.items || [];
-      return items.map(item => {
-        if (typeof item === 'string') {
-          return { tag: item, count: 0 };
-        }
-        return {
-          tag: item._id || item.tag || '',
-          count: typeof item.count === 'number' ? item.count : 0
-        };
-      }).filter(t => Boolean(t.tag));
-    } catch (e) {
-      console.warn('Failed to fetch tags:', e);
-      return [];
-    }
+    const data = await this.request('/tags/0', token);
+    const items = data?.items || [];
+    return items.map(item => {
+      if (typeof item === 'string') {
+        return { tag: item, count: 0 };
+      }
+      return {
+        tag: item._id || item.tag || '',
+        count: typeof item.count === 'number' ? item.count : 0
+      };
+    }).filter(t => Boolean(t.tag));
   },
 
   /**
@@ -603,17 +646,30 @@ const RaindropAPI = {
 
   /**
    * Create multiple bookmarks in batch using POST /raindrops (plural)
-   * Automatically chunks into batches of 100 if > 100 items
+   * Automatically chunks into batches of 100 if > 100 items.
+   * Strictly filters to http(s) URLs and deduplicates within the batch.
    */
   async createRaindropsBatch(token, items) {
+    if (!token) throw new RaindropAPIError('API token required.', 401);
     if (!items || !Array.isArray(items) || items.length === 0) {
       return { result: true, items: [] };
     }
 
-    const formattedItems = items.map(item => {
-      if (!item) return null;
-      const link = item.link || item.url;
-      if (!link || typeof link !== 'string' || !link.trim()) return null;
+    const seenLinks = new Set();
+    const formattedItems = [];
+
+    for (const item of items) {
+      if (!item) continue;
+      const rawLink = item.link || item.url;
+      if (!rawLink || typeof rawLink !== 'string') continue;
+      const cleanLink = rawLink.trim();
+      if (!cleanLink.startsWith('http://') && !cleanLink.startsWith('https://')) {
+        continue; // Only valid web URLs
+      }
+      if (seenLinks.has(cleanLink)) {
+        continue; // Deduplicate within batch
+      }
+      seenLinks.add(cleanLink);
 
       const targetCollectionId = item.collection?.$id !== undefined
         ? Number(item.collection.$id)
@@ -624,9 +680,9 @@ const RaindropAPI = {
         : [];
 
       const payload = {
-        link: link.trim(),
-        title: item.title || link.trim(),
-        excerpt: item.excerpt || item.note || '',
+        link: cleanLink,
+        title: item.title || cleanLink,
+        excerpt: item.excerpt || '',
         note: item.note || '',
         important: Boolean(item.important),
         tags: cleanTags,
@@ -642,8 +698,8 @@ const RaindropAPI = {
           : { date: new Date(Date.now() + 86400000).toISOString() };
       }
 
-      return payload;
-    }).filter(Boolean);
+      formattedItems.push(payload);
+    }
 
     if (formattedItems.length === 0) {
       return { result: true, items: [] };
@@ -669,15 +725,88 @@ const RaindropAPI = {
   },
 
   /**
-   * Check if a URL is already bookmarked
+   * Check if a URL is already bookmarked using official POST /import/url/exists
+   * and GET /raindrop/{id}.
+   * Handles result: false as a valid "not found" response specifically for this endpoint.
    */
   async checkUrl(token, url) {
-    if (!url) return null;
-    try {
-      const data = await this.request(`/check/url?url=${encodeURIComponent(url)}`, token);
-      return data?.item || null;
-    } catch (e) {
+    if (!url || typeof url !== 'string') return null;
+    const cleanUrl = url.trim();
+    if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
       return null;
+    }
+
+    try {
+      const res = await this.request('/import/url/exists', token, {
+        method: 'POST',
+        body: { urls: [cleanUrl] },
+        allowResultFalse: true
+      });
+
+      const ids = Array.isArray(res?.ids) ? res.ids : [];
+      if (ids.length === 0 || !ids[0]) {
+        return null;
+      }
+
+      const raindropRes = await this.request(`/raindrop/${ids[0]}`, token);
+      return raindropRes?.item || null;
+    } catch (e) {
+      if (e.status === 401) throw e;
+      console.warn('checkUrl error:', e);
+      return null;
+    }
+  },
+
+  /**
+   * Bulk check existence of multiple URLs using official POST /import/url/exists.
+   * Correlates returned bookmarks by their actual .link property (not positionally).
+   */
+  async checkUrlsExists(token, urls = []) {
+    if (!token || !Array.isArray(urls) || urls.length === 0) {
+      return new Map();
+    }
+
+    const validUrls = Array.from(new Set(
+      urls
+        .map(u => (typeof u === 'string' ? u.trim() : ''))
+        .filter(u => u.startsWith('http://') || u.startsWith('https://'))
+    ));
+
+    if (validUrls.length === 0) {
+      return new Map();
+    }
+
+    try {
+      const res = await this.request('/import/url/exists', token, {
+        method: 'POST',
+        body: { urls: validUrls },
+        allowResultFalse: true
+      });
+
+      const ids = Array.isArray(res?.ids) ? res.ids : [];
+      const linkMap = new Map();
+      if (ids.length === 0) {
+        return linkMap;
+      }
+
+      const BATCH = 20;
+      for (let i = 0; i < ids.length; i += BATCH) {
+        const slice = ids.slice(i, i + BATCH);
+        const fetched = await Promise.all(
+          slice.map(id => this.request(`/raindrop/${id}`, token).catch(() => null))
+        );
+        for (const itemRes of fetched) {
+          const item = itemRes?.item;
+          if (item && item.link) {
+            linkMap.set(item.link.trim(), item);
+          }
+        }
+      }
+
+      return linkMap;
+    } catch (e) {
+      console.warn('checkUrlsExists error:', e);
+      return new Map();
     }
   },
 

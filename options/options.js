@@ -109,10 +109,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     e.preventDefault();
     hideBanner();
 
-    let token = tokenInput.value.trim().replace(/^["']|["']$/g, '');
-    if (token.toLowerCase().startsWith('bearer ')) {
-      token = token.slice(7).trim();
-    }
+    const token = RaindropStorage.sanitizeToken(tokenInput.value);
 
     if (!token) {
       showBanner('Please provide a valid token.', 'warning');
@@ -124,10 +121,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     saveBtnText.textContent = 'Verifying...';
 
     try {
+      // 1. Verify token and ensure valid account identity
       const user = await RaindropAPI.verifyToken(token);
+      if (!user || user._id === undefined) {
+        throw new Error('Could not verify account identity.');
+      }
+
+      // 2. Check if switching accounts or replacing token
+      const existingToken = await RaindropStorage.getToken();
+      const existingUser = await RaindropStorage.getUser();
+      const isDifferent = (existingToken && existingToken !== token) || (existingUser && existingUser._id !== user._id);
+      if (isDifferent) {
+        // Clear old account state to prevent cross-account bleed (F-07)
+        await RaindropStorage.clearAccountData();
+      }
+
+      // 3. Save new verified token and user
       await RaindropStorage.setToken(token);
       await RaindropStorage.setUser(user);
-      tokenInput.value = token;
+
+      // 4. Mask token in UI (F-14)
+      tokenInput.value = '';
+      tokenInput.placeholder = `Connected (••••${token.slice(-4)}) - enter new token to switch`;
 
       renderConnected(user);
       showBanner(`Connected to ${user.fullName || user.email || 'Account B'} successfully!`, 'success');
@@ -147,11 +162,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     testConnectionBtn.disabled = true;
     testConnectionBtn.textContent = 'Testing...';
 
-    let token = (await RaindropStorage.getToken()) || tokenInput.value.trim();
-    token = token.replace(/^["']|["']$/g, '');
-    if (token.toLowerCase().startsWith('bearer ')) {
-      token = token.slice(7).trim();
-    }
+    const storedToken = await RaindropStorage.getToken();
+    const rawInput = tokenInput.value;
+    const token = rawInput ? RaindropStorage.sanitizeToken(rawInput) : storedToken;
 
     if (!token) {
       testConnectionBtn.disabled = false;
@@ -178,6 +191,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (confirm('Disconnect this extension from your secondary Raindrop account?')) {
       await RaindropStorage.clearToken();
       tokenInput.value = '';
+      tokenInput.placeholder = 'Paste your test token here...';
       renderDisconnected();
       showBanner('Disconnected. Extension token cleared.', 'info');
     }
@@ -194,7 +208,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   if (storedToken) {
-    tokenInput.value = storedToken;
+    tokenInput.value = '';
+    tokenInput.placeholder = `Connected (••••${storedToken.slice(-4)}) - enter new token to switch`;
   }
   await checkConnection(storedToken);
 });

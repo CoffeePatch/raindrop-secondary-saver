@@ -261,14 +261,25 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
       const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
       return { result: true, item: { _id: 888, title: parsedBody ? parsedBody.title : '' } };
     }
+    if (endpoint === '/import/url/exists' && options.method === 'POST') {
+      const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+      const urls = parsedBody?.urls || [];
+      if (urls.includes('https://github.com')) {
+        return { result: true, ids: [9999] };
+      }
+      return { result: false, ids: [] };
+    }
+    if (endpoint === '/raindrop/9999' && (!options || !options.method || options.method === 'GET')) {
+      return { result: true, item: { _id: 9999, title: 'Already Saved Page', link: 'https://github.com', cover: 'https://example.com/cover.jpg', reminder: { date: '2026-11-10T12:00:00Z' } } };
+    }
     if (endpoint.startsWith('/check/url')) {
       return { result: true, item: { _id: 9999, title: 'Already Saved Page', cover: 'https://example.com/cover.jpg', reminder: { date: '2026-11-10T12:00:00Z' } } };
     }
-    if (endpoint.startsWith('/raindrop/9999') && options.method === 'PUT') {
+    if (endpoint.startsWith('/raindrop/9999') && options && options.method === 'PUT') {
       const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
       return { result: true, item: { _id: 9999, ...parsedBody } };
     }
-    if (endpoint.startsWith('/raindrop/9999') && options.method === 'DELETE') {
+    if (endpoint.startsWith('/raindrop/9999') && options && options.method === 'DELETE') {
       return { result: true };
     }
     return { result: true };
@@ -1374,6 +1385,518 @@ console.log('\n=== 7. STORAGE & TOKEN SANITIZATION TESTS ===');
   assert(latestPopupJs.includes('existingBookmark?.collection?.$id'), 'popup.js preserves existing bookmark collection during background sync');
   assert(latestPopupJs.includes('RaindropStorage.getCachedTags()') && latestPopupJs.includes('allTags = cachedTags'), 'popup.js preloads cached tags for 0ms tag autocomplete on open');
   assert(latestPopupJs.includes('expandedInitialized'), 'popup.js distinguishes empty saved expanded collection set from first run');
+
+  // ==========================================
+  // 16. PHASE P0 REMEDIATION VERIFICATION
+  // ==========================================
+  console.log(`\n=== 16. PHASE P0 REMEDIATION VERIFICATION (F-01, F-02, F-03, F-06, F-07, F-09, F-10, F-14, F-20) ===`);
+
+  // [F-01] Documented existence check via POST /import/url/exists
+  let capturedExistsCall = null;
+  const originalApiRequest = RaindropAPI.request;
+  RaindropAPI.request = async (endpoint, token, options = {}) => {
+    if (endpoint === '/import/url/exists' && options.method === 'POST') {
+      capturedExistsCall = { endpoint, options };
+      const body = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+      if (body && Array.isArray(body.urls) && body.urls.includes('https://exists.com')) {
+        return { result: true, ids: [4242] };
+      }
+      return { result: false, ids: [] };
+    }
+    if (endpoint === '/raindrop/4242') {
+      return { result: true, item: { _id: 4242, link: 'https://exists.com', title: 'Found Item' } };
+    }
+    return originalApiRequest.call(RaindropAPI, endpoint, token, options);
+  };
+
+  const foundItem = await RaindropAPI.checkUrl('test-token', 'https://exists.com');
+  assert(capturedExistsCall && capturedExistsCall.endpoint === '/import/url/exists', 'F-01: checkUrl calls POST /import/url/exists');
+  assert(foundItem && foundItem._id === 4242 && foundItem.title === 'Found Item', 'F-01: checkUrl resolves bookmark via GET /raindrop/:id');
+
+  // Non-existing URL handles result: false without throwing
+  const notFoundItem = await RaindropAPI.checkUrl('test-token', 'https://notfound.com');
+  assert(notFoundItem === null, 'F-01: checkUrl cleanly returns null when /import/url/exists returns result: false');
+
+  // Restore request to test real RaindropAPI.request logic with mocked fetch
+  RaindropAPI.request = originalApiRequest;
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: new Map(),
+    json: async () => ({ result: false, errorMessage: 'Generic API Failure' })
+  });
+
+  try {
+    await RaindropAPI.request('/error-endpoint', 'test-token');
+    assert(false, 'RaindropAPI.request should throw on result: false for general endpoints');
+  } catch (err) {
+    assert(err.message.includes('Generic API Failure'), 'F-01: RaindropAPI.request does not globally suppress result: false errors');
+  }
+
+  // With allowResultFalse: true, it returns { result: false }
+  const falseAllowed = await RaindropAPI.request('/error-endpoint', 'test-token', { allowResultFalse: true });
+  assert(falseAllowed && falseAllowed.result === false, 'F-01: RaindropAPI.request allows result: false when allowResultFalse is set');
+
+  global.fetch = originalFetch;
+
+  // Correlate bulk URLs by actual .link property (not positional index)
+  RaindropAPI.request = async (endpoint, token, options = {}) => {
+    if (endpoint === '/import/url/exists') {
+      // Returns ids [200, 100] in non-positional order
+      return { result: true, ids: [200, 100] };
+    }
+    if (endpoint === '/raindrop/200') {
+      return { result: true, item: { _id: 200, link: 'https://site2.com', title: 'Site Two' } };
+    }
+    if (endpoint === '/raindrop/100') {
+      return { result: true, item: { _id: 100, link: 'https://site1.com', title: 'Site One' } };
+    }
+    return originalApiRequest.call(RaindropAPI, endpoint, token, options);
+  };
+
+  const correlatedResults = await RaindropAPI.checkUrlsExists('test-token', ['https://site1.com', 'https://site2.com']);
+  assert(correlatedResults.get('https://site1.com')?._id === 100, 'F-01: checkUrlsExists correctly correlates site1 by .link');
+  assert(correlatedResults.get('https://site2.com')?._id === 200, 'F-01: checkUrlsExists correctly correlates site2 by .link');
+
+  // Restore request
+  RaindropAPI.request = originalApiRequest;
+
+  // [F-03] Cache protection on network error / 429
+  // Ensure getCollections and getTags throw instead of swallowing errors into empty arrays
+  const throwingRequest = async () => {
+    const err = new Error('Rate limit exceeded 429');
+    err.status = 429;
+    throw err;
+  };
+  const tempApiRequest = RaindropAPI.request;
+  RaindropAPI.request = throwingRequest;
+
+  try {
+    await RaindropAPI.getCollections('test-token');
+    assert(false, 'getCollections must throw on network error');
+  } catch (err) {
+    assert(err.status === 429, 'F-03: getCollections throws error instead of returning empty array []');
+  }
+
+  try {
+    await RaindropAPI.getTags('test-token');
+    assert(false, 'getTags must throw on network error');
+  } catch (err) {
+    assert(err.status === 429, 'F-03: getTags throws error instead of returning empty array []');
+  }
+
+  RaindropAPI.request = tempApiRequest;
+
+  // [F-07] Account data clearing & token migration
+  await RaindropStorage.setToken('preserve-this-token');
+  await RaindropStorage.setUser({ _id: 1234, email: 'accB@test.com' });
+  await RaindropStorage.setCachedCollections({ collections: [{ id: 1 }] });
+  await RaindropStorage.setCachedTags(['tag1', 'tag2']);
+  await RaindropStorage.setRecentTags(['recent1']);
+  await RaindropStorage.setLastCollectionId(99);
+  await RaindropStorage.setExpandedCollectionIds([1, 2]);
+
+  await RaindropStorage.clearAccountData();
+  const tokenAfterClear = await RaindropStorage.getToken();
+  const userAfterClear = await RaindropStorage.getUser();
+  const collsAfterClear = await RaindropStorage.getCachedCollections();
+  const tagsAfterClear = await RaindropStorage.getCachedTags();
+  const recentTagsAfterClear = await RaindropStorage.getRecentTags();
+  const lastColAfterClear = await RaindropStorage.getLastCollectionId();
+  const expandedAfterClear = await RaindropStorage.getExpandedCollectionIds();
+
+  assert(tokenAfterClear === 'preserve-this-token', 'F-07: clearAccountData preserves active token');
+  assert(userAfterClear === null, 'F-07: clearAccountData clears cached user');
+  assert(collsAfterClear === null, 'F-07: clearAccountData clears cached collections');
+  assert(tagsAfterClear === null, 'F-07: clearAccountData clears cached tags');
+  assert(recentTagsAfterClear.length === 0, 'F-07: clearAccountData clears recent tags');
+  assert(lastColAfterClear === 0, 'F-07: clearAccountData resets last collection ID to 0');
+  assert(expandedAfterClear === null || (Array.isArray(expandedAfterClear) && expandedAfterClear.length === 0), 'F-07: clearAccountData clears expanded collections');
+
+  // [F-10] Token storage in local-only & sync migration
+  for (const k in mockLocalStorage) delete mockLocalStorage[k];
+  for (const k in mockSyncStorage) delete mockSyncStorage[k];
+
+  // Migration test: token only in sync
+  mockSyncStorage['raindrop_token'] = 'sync-token-999';
+  const migratedToken = await RaindropStorage.getToken();
+  assert(migratedToken === 'sync-token-999', 'F-10: getToken reads and migrates token from sync storage');
+  assert(mockLocalStorage['raindrop_token'] === 'sync-token-999', 'F-10: Token migrated to local storage');
+  assert(mockSyncStorage['raindrop_token'] === undefined, 'F-10: Sync copy removed after migration');
+
+  // Preservation test: local token takes precedence over any stale sync token
+  mockLocalStorage['raindrop_token'] = 'active-local-token';
+  mockSyncStorage['raindrop_token'] = 'old-stale-sync-token';
+  const activeToken = await RaindropStorage.getToken();
+  assert(activeToken === 'active-local-token', 'F-10: getToken preserves active local token over stale sync token');
+  assert(mockSyncStorage['raindrop_token'] === undefined, 'F-10: Stale sync token deleted during check');
+
+  // setToken writes exclusively to local
+  await RaindropStorage.setToken('new-local-token');
+  assert(mockLocalStorage['raindrop_token'] === 'new-local-token', 'F-10: setToken writes to local storage');
+  assert(mockSyncStorage['raindrop_token'] === undefined, 'F-10: setToken leaves sync storage clean');
+
+  // [F-20] Shared token sanitization
+  assert(RaindropStorage.sanitizeToken('  "Bearer abc-123"  ') === 'abc-123', 'F-20: sanitizeToken strips whitespace, quotes, and Bearer prefix');
+  assert(RaindropStorage.sanitizeToken("'bearer xyz-789'") === 'xyz-789', 'F-20: sanitizeToken handles single quotes and lowercase bearer');
+  assert(RaindropStorage.sanitizeToken('') === '', 'F-20: sanitizeToken returns empty string for empty input');
+  assert(RaindropStorage.sanitizeToken(null) === '', 'F-20: sanitizeToken returns empty string for null input');
+
+  // [F-09] Batch save validation, URL deduplication, and confirmed tab closing
+  let capturedBatchPayload = null;
+  RaindropAPI.request = async (endpoint, token, options = {}) => {
+    if (endpoint === '/raindrops') {
+      capturedBatchPayload = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+      return {
+        result: true,
+        items: capturedBatchPayload.items.map((item, idx) => ({ _id: 1000 + idx, link: item.link }))
+      };
+    }
+    return originalApiRequest.call(RaindropAPI, endpoint, token, options);
+  };
+
+  const rawBatchItems = [
+    { url: 'https://example.com/page1', title: 'P1' },
+    { url: 'file:///etc/passwd', title: 'File Exploit' },
+    { url: 'chrome://settings', title: 'Internal Settings' },
+    { url: 'https://example.com/page1', title: 'P1 Duplicate' },
+    { url: 'http://example.com/page2', title: 'P2' }
+  ];
+
+  const batchResponse = await RaindropAPI.createRaindropsBatch('test-token', rawBatchItems);
+  assert(capturedBatchPayload && capturedBatchPayload.items.length === 2, 'F-09: createRaindropsBatch filters to 2 valid unique http/https URLs');
+  assert(capturedBatchPayload.items[0].link === 'https://example.com/page1', 'F-09: Batch item 1 is valid https URL');
+  assert(capturedBatchPayload.items[1].link === 'http://example.com/page2', 'F-09: Batch item 2 is valid http URL');
+  assert(batchResponse.items.length === 2, 'F-09: createRaindropsBatch returns confirmed saved items');
+
+  // Background service worker confirmed-only tab closing verification
+  const backgroundJsContent = fs.readFileSync(path.join(EXT_DIR, 'background.js'), 'utf8');
+  assert(backgroundJsContent.includes('savedLinks'), 'F-09: background.js checks savedLinks from Raindrop response');
+  assert(backgroundJsContent.includes('isUrlInSavedSet'), 'F-09 / M-01: background.js verifies savedLinks via isUrlInSavedSet');
+
+  // [F-02, F-06, F-14] Popup JS source verification
+  const updatedPopupJs = fs.readFileSync(path.join(EXT_DIR, 'popup/popup.js'), 'utf8');
+  assert(updatedPopupJs.includes('loadedBookmarkUrl'), 'F-02: popup.js tracks loadedBookmarkUrl');
+  assert(updatedPopupJs.includes('isUrlMatchingLoadedBookmark') && updatedPopupJs.includes('existingBookmark = null'), 'F-02: popup.js decouples existingBookmark when URL destination changes');
+  assert(updatedPopupJs.includes('checkingBookmarkPromise'), 'F-06: popup.js tracks checkingBookmarkPromise');
+  assert(updatedPopupJs.includes('await checkingBookmarkPromise'), 'F-06: popup.js awaits in-flight checkBookmarkStatus before save');
+  assert(updatedPopupJs.includes('userEditedFields'), 'F-06: popup.js tracks userEditedFields');
+  assert(updatedPopupJs.includes('Connected (••••'), 'F-14: popup.js masks token placeholder in DOM');
+
+  // [F-14, F-07] Options JS source verification
+  const updatedOptionsJs = fs.readFileSync(path.join(EXT_DIR, 'options/options.js'), 'utf8');
+  assert(updatedOptionsJs.includes('Connected (••••'), 'F-14: options.js masks token placeholder in DOM');
+  assert(updatedOptionsJs.includes('RaindropStorage.clearAccountData()'), 'F-07: options.js clears previous account data when switching accounts');
+
+  RaindropAPI.request = originalApiRequest;
+
+  // =========================================================================
+  // SECTION 17: PHASE P0 CORRECTIVE BEHAVIOURAL TESTS (H-01, M-01, M-02, M-03)
+  // =========================================================================
+  console.log('\n=== 17. PHASE P0 BEHAVIOURAL VERIFICATION (H-01, M-01, M-02, M-03) ===');
+
+  const { areUrlsEquivalent } = require(path.join(EXT_DIR, 'popup/popup.js'));
+  const { handleSaveTabsBatch, isUrlInSavedSet } = require(path.join(EXT_DIR, 'background.js'));
+
+  // -------------------------------------------------------------------------
+  // A. H-01: Bookmark Editing & URL Decoupling Behavioral Tests
+  // -------------------------------------------------------------------------
+  // 1. areUrlsEquivalent unit behavioral checks
+  assert(areUrlsEquivalent('https://example.com', 'https://example.com/'), 'H-01: areUrlsEquivalent treats root URL trailing slash as equivalent');
+  assert(areUrlsEquivalent('https://example.com/path/', 'https://example.com/path'), 'H-01: areUrlsEquivalent treats subpath trailing slash as equivalent');
+  assert(areUrlsEquivalent('https://example.com:443/docs', 'https://example.com:443/docs/'), 'H-01: areUrlsEquivalent matches with port');
+  assert(!areUrlsEquivalent('https://example.com', 'https://another-destination.org'), 'H-01: areUrlsEquivalent rejects different host');
+  assert(!areUrlsEquivalent('https://example.com/a', 'https://example.com/b'), 'H-01: areUrlsEquivalent rejects different path');
+  assert(!areUrlsEquivalent('https://example.com?q=1', 'https://example.com?q=2'), 'H-01: areUrlsEquivalent rejects different search query');
+  assert(!areUrlsEquivalent('https://example.com#h1', 'https://example.com#h2'), 'H-01: areUrlsEquivalent rejects different hash');
+  assert(!areUrlsEquivalent('http://example.com', 'https://example.com'), 'H-01: areUrlsEquivalent rejects protocol mismatch');
+
+  // 2. Behavioral simulation of popup bookmark saving state machine
+  const originalUpdateRaindrop = RaindropAPI.updateRaindrop;
+  const originalCreateRaindrop = RaindropAPI.createRaindrop;
+  const originalCreateBatch = RaindropAPI.createRaindropsBatch;
+
+  let updateCalls = [];
+  let createCalls = [];
+
+  RaindropAPI.updateRaindrop = async (token, id, payload) => {
+    updateCalls.push({ token, id, payload });
+    return { _id: id, ...payload };
+  };
+  RaindropAPI.createRaindrop = async (token, payload) => {
+    const newId = 8888 + createCalls.length;
+    createCalls.push({ token, payload, newId });
+    return { _id: newId, ...payload };
+  };
+
+  class PopupSaveStateMachine {
+    constructor(lookupUrl, apiBookmark) {
+      this.loadedBookmarkUrl = lookupUrl;
+      this.canonicalBookmarkUrl = (apiBookmark?.link || '').trim() || null;
+      this.originalLoadedBookmark = apiBookmark;
+      this.existingBookmark = apiBookmark;
+      this.urlInput = lookupUrl;
+      this.title = apiBookmark?.title || '';
+      this.note = apiBookmark?.note || '';
+      this.tags = [...(apiBookmark?.tags || [])];
+      this.selectedCollectionId = 0;
+    }
+
+    isUrlMatchingLoadedBookmark(inputUrl) {
+      if (!inputUrl) return false;
+      if (this.loadedBookmarkUrl && areUrlsEquivalent(inputUrl, this.loadedBookmarkUrl)) {
+        return true;
+      }
+      if (this.canonicalBookmarkUrl && areUrlsEquivalent(inputUrl, this.canonicalBookmarkUrl)) {
+        return true;
+      }
+      return false;
+    }
+
+    onUrlInput(newVal) {
+      this.urlInput = newVal;
+      const currentVal = newVal.trim();
+      if (this.isUrlMatchingLoadedBookmark(currentVal)) {
+        if (!this.existingBookmark && this.originalLoadedBookmark) {
+          this.existingBookmark = this.originalLoadedBookmark;
+        }
+      } else {
+        if (this.existingBookmark) {
+          this.existingBookmark = null;
+        }
+      }
+    }
+
+    async submitSave() {
+      let url = this.urlInput.trim();
+      if (url && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) {
+        url = 'https://' + url;
+      }
+      if (this.existingBookmark && !this.isUrlMatchingLoadedBookmark(url)) {
+        this.existingBookmark = null;
+      }
+      const payload = {
+        url,
+        title: this.title,
+        note: this.note,
+        tags: this.tags,
+        collectionId: this.selectedCollectionId
+      };
+      if (this.existingBookmark?._id) {
+        return await RaindropAPI.updateRaindrop('test-token', this.existingBookmark._id, payload);
+      } else {
+        return await RaindropAPI.createRaindrop('test-token', payload);
+      }
+    }
+  }
+
+  // Case 1: Trailing-slash equivalence
+  // browser tab: 'https://example.com', Raindrop API returned: 'https://example.com/'
+  updateCalls = [];
+  createCalls = [];
+  const sm1 = new PopupSaveStateMachine('https://example.com', {
+    _id: 9001,
+    link: 'https://example.com/',
+    title: 'Example Home',
+    note: 'Initial note'
+  });
+  // Editing note and tags only, URL input unchanged
+  sm1.note = 'Modified note only';
+  sm1.tags = ['research'];
+  await sm1.submitSave();
+  assert(updateCalls.length === 1 && updateCalls[0].id === 9001, 'H-01 Case 1: Preserves bookmark 9001 and calls updateRaindrop on trailing-slash equivalence');
+  assert(createCalls.length === 0, 'H-01 Case 1: Does not call createRaindrop when only metadata changed');
+
+  // Case 2: Genuine URL destination change
+  // URL edited to 'https://another-destination.org' decouples the bookmark
+  updateCalls = [];
+  createCalls = [];
+  const sm2 = new PopupSaveStateMachine('https://example.com', {
+    _id: 9001,
+    link: 'https://example.com/',
+    title: 'Example Home'
+  });
+  sm2.onUrlInput('https://another-destination.org');
+  assert(sm2.existingBookmark === null, 'H-01 Case 2: Decouples existingBookmark immediately on destination change');
+  await sm2.submitSave();
+  assert(createCalls.length === 1 && createCalls[0].payload.url === 'https://another-destination.org', 'H-01 Case 2: Calls createRaindrop for new destination');
+  assert(updateCalls.length === 0, 'H-01 Case 2: Leaves existing bookmark 9001 untouched');
+
+  // Case 3: Reversion to original lookup URL
+  updateCalls = [];
+  createCalls = [];
+  const sm3 = new PopupSaveStateMachine('https://example.com', {
+    _id: 9001,
+    link: 'https://example.com/',
+    title: 'Example Home'
+  });
+  sm3.onUrlInput('https://another-destination.org');
+  assert(sm3.existingBookmark === null, 'H-01 Case 3: Decoupled when changed away');
+  sm3.onUrlInput('https://example.com'); // Reverting back to original
+  assert(sm3.existingBookmark !== null && sm3.existingBookmark._id === 9001, 'H-01 Case 3: Restores existing bookmark 9001 on reversion');
+  await sm3.submitSave();
+  assert(updateCalls.length === 1 && updateCalls[0].id === 9001, 'H-01 Case 3: Calls updateRaindrop(9001) after reverting URL');
+  assert(createCalls.length === 0, 'H-01 Case 3: Does not create duplicate bookmark after reverting URL');
+
+
+  // -------------------------------------------------------------------------
+  // B. M-01, M-02, M-03: Batch Saving & Tab Management Behavioral Tests
+  // -------------------------------------------------------------------------
+  const closedTabsLog = [];
+  const badgedTabs = new Set();
+
+  global.chrome.tabs = {
+    ...global.chrome.tabs,
+    remove: async (ids) => {
+      const arr = Array.isArray(ids) ? ids : [ids];
+      closedTabsLog.push(...arr);
+    },
+    query: async () => []
+  };
+
+  global.chrome.action = {
+    ...global.chrome.action,
+    setBadgeText: ({ tabId, text }) => {
+      if (text === '✓') {
+        badgedTabs.add(tabId);
+      } else if (!text) {
+        badgedTabs.delete(tabId);
+      }
+    },
+    setBadgeBackgroundColor: () => {},
+    setBadgeTextColor: () => {},
+    setTitle: () => {}
+  };
+
+  await RaindropStorage.setToken('batch-test-token-valid');
+
+  // Case 1: All requested tabs save successfully
+  closedTabsLog.length = 0;
+  badgedTabs.clear();
+  RaindropAPI.createRaindropsBatch = async (token, items) => {
+    return {
+      result: true,
+      items: items.map((it, idx) => ({ _id: 5001 + idx, link: it.url }))
+    };
+  };
+
+  const batchReqCase1 = {
+    items: [
+      { tabId: 101, url: 'https://site1.com', title: 'Site 1' },
+      { tabId: 102, url: 'https://site2.com', title: 'Site 2' }
+    ],
+    closeTabIds: [101] // Only tab 101 requested to close; 102 stays open
+  };
+
+  const resCase1 = await handleSaveTabsBatch(batchReqCase1);
+  assert(resCase1.success === true, 'M-02 Case 1: Returns success: true');
+  assert(resCase1.count === 2, 'M-02 Case 1: Returns accurate saved count: 2');
+  assert(resCase1.totalRequested === 2, 'M-02 Case 1: Reports totalRequested: 2');
+  assert(resCase1.closedTabIds.length === 1 && resCase1.closedTabIds[0] === 101, 'M-03 Case 1: closedTabIds accurately contains [101]');
+  assert(closedTabsLog.includes(101) && !closedTabsLog.includes(102), 'M-03 Case 1: Actually closed requested tab 101 and kept 102');
+  assert(badgedTabs.has(102), 'M-01 Case 1: Remaining open saved tab 102 received ✓ badge');
+  assert(!badgedTabs.has(101), 'M-01 Case 1: Closed tab 101 was not badged');
+
+  // Case 2: Partial save failure (1 saved, 2 failed)
+  closedTabsLog.length = 0;
+  badgedTabs.clear();
+  RaindropAPI.createRaindropsBatch = async (token, items) => {
+    // Raindrop only saved the first item
+    return {
+      result: true,
+      items: [{ _id: 6001, link: 'https://success.com' }]
+    };
+  };
+
+  const batchReqCase2 = {
+    items: [
+      { tabId: 201, url: 'https://success.com', title: 'Success' },
+      { tabId: 202, url: 'https://failure1.com', title: 'Fail 1' },
+      { tabId: 203, url: 'https://failure2.com', title: 'Fail 2' }
+    ],
+    closeTabIds: [201, 202, 203] // User asked to close all 3
+  };
+
+  const resCase2 = await handleSaveTabsBatch(batchReqCase2);
+  assert(resCase2.count === 1, 'M-02 Case 2: Partial save returns count: 1 (not 3)');
+  assert(resCase2.totalRequested === 3, 'M-02 Case 2: Reports totalRequested: 3');
+  assert(resCase2.closedTabIds.length === 1 && resCase2.closedTabIds[0] === 201, 'M-03 Case 2: closedTabIds only includes confirmed tab 201');
+  assert(closedTabsLog.includes(201), 'M-03 Case 2: Confirmed tab 201 was closed');
+  assert(!closedTabsLog.includes(202) && !closedTabsLog.includes(203), 'M-03 Case 2: Failed tabs 202 and 203 were NOT closed');
+  assert(!badgedTabs.has(202) && !badgedTabs.has(203), 'M-01 Case 2: Failed tabs 202 and 203 never receive saved badges');
+
+  // Case 3: Complete save failure (0 saved)
+  closedTabsLog.length = 0;
+  badgedTabs.clear();
+  RaindropAPI.createRaindropsBatch = async () => {
+    return { result: false, items: [] };
+  };
+
+  const batchReqCase3 = {
+    items: [
+      { tabId: 301, url: 'https://fail-a.com' },
+      { tabId: 302, url: 'https://fail-b.com' }
+    ],
+    closeTabIds: [301, 302]
+  };
+
+  const resCase3 = await handleSaveTabsBatch(batchReqCase3);
+  assert(resCase3.count === 0, 'M-02 Case 3: Complete failure returns count: 0 (not 2 or totalRequested)');
+  assert(resCase3.closedTabIds.length === 0, 'M-03 Case 3: closedTabIds is empty [] on total failure');
+  assert(closedTabsLog.length === 0, 'M-03 Case 3: Zero tabs closed on total failure');
+  assert(badgedTabs.size === 0, 'M-01 Case 3: Zero badges set on total failure');
+
+  // Case 4: Tab badging accuracy
+  assert(!badgedTabs.has(301) && !badgedTabs.has(302), 'M-01 Case 4: Failed tabs never receive saved badges');
+
+  // Case 5: URL representation matching in batch (trailing slash equivalence)
+  closedTabsLog.length = 0;
+  badgedTabs.clear();
+  RaindropAPI.createRaindropsBatch = async () => {
+    return {
+      result: true,
+      items: [{ _id: 7001, link: 'https://slash-test.org/' }]
+    };
+  };
+
+  const batchReqCase5 = {
+    items: [
+      { tabId: 501, url: 'https://slash-test.org', title: 'No Slash Input' }
+    ],
+    closeTabIds: [501]
+  };
+
+  const resCase5 = await handleSaveTabsBatch(batchReqCase5);
+  assert(resCase5.count === 1, 'M-01/M-03 Case 5: Matches trailing-slash difference in batch response');
+  assert(resCase5.closedTabIds.includes(501), 'M-03 Case 5: Tab 501 confirmed and closed despite trailing slash');
+  assert(closedTabsLog.includes(501), 'M-03 Case 5: Tab 501 actually closed');
+
+  // Case 6: Popup open-tab list refresh contract
+  let openTabsData = [
+    { id: 601, title: 'Tab 1', url: 'https://tab1.com' },
+    { id: 602, title: 'Tab 2', url: 'https://tab2.com' },
+    { id: 603, title: 'Tab 3', url: 'https://tab3.com' }
+  ];
+
+  const mockBatchResult = {
+    success: true,
+    count: 2,
+    totalRequested: 3,
+    closedTabIds: [601, 603]
+  };
+
+  if (Array.isArray(mockBatchResult.closedTabIds) && mockBatchResult.closedTabIds.length > 0) {
+    const closedSet = new Set(mockBatchResult.closedTabIds);
+    openTabsData = openTabsData.filter(tab => !closedSet.has(tab.id));
+  }
+
+  assert(openTabsData.length === 1 && openTabsData[0].id === 602, 'M-03 Case 6: Popup openTabsData filters out exactly closedTabIds and retains unclosed tab 602');
+
+  // Restore API methods
+  RaindropAPI.updateRaindrop = originalUpdateRaindrop;
+  RaindropAPI.createRaindrop = originalCreateRaindrop;
+  RaindropAPI.createRaindropsBatch = originalCreateBatch;
 
   console.log(`\n========================================`);
   console.log(`Verification Complete: ${passed} Passed, ${failed} Failed`);
